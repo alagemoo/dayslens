@@ -70,11 +70,11 @@ Everything stays **100% on your device**. No cloud. No account. No subscription.
 
 | Today Dashboard | Weekly Report |
 |---|---|
-| *![alt text](image.png)* | *![alt text](image-1.png)* |
+| *![Today's Dashboard](image.png)* | *![Weekly Report Screen](image-1.png)* |
 
 | Day Log | All Apps |
 |---|---|
-| *![alt text](image-2.png))* | *(![alt text](image-3.png))* |
+| *![Day Log Screen](image-2.png))* | *(![All Apps Screen](image-3.png))* |
 
 ---
 
