@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    width: 280px;
+    font-family: 'Segoe UI', system-ui, sans-serif;
+    background: #0b0d14;
+    color: #e8eaf2;
+  }
+
+  .header {
+    padding: 16px 18px 14px;
+    border-bottom: 1px solid #1e2333;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .logo {
+    font-size: 16px;
+    font-weight: 800;
+    background: linear-gradient(135deg, #4f8ef7, #7c5cfc);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+  }
+  .logo-sub { font-size: 10px; color: #6b7290; font-family: 'Consolas', monospace; margin-top: 1px; }
+
+  .status-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 14px 18px;
+    border-bottom: 1px solid #1e2333;
+  }
+  .dot {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: #f87171;
+    flex-shrink: 0;
+  }
+  .dot.connected { background: #34d399; animation: pulse 2s infinite; }
+  @keyframes pulse {
+    0%   { box-shadow: 0 0 0 0 rgba(52,211,153,0.5); }
+    70%  { box-shadow: 0 0 0 5px rgba(52,211,153,0); }
+    100% { box-shadow: 0 0 0 0 rgba(52,211,153,0); }
+  }
+  .status-text { font-size: 12.5px; color: #94a3b8; }
+  .status-text strong { color: #e8eaf2; }
+
+  .current-site {
+    padding: 14px 18px;
+    border-bottom: 1px solid #1e2333;
+  }
+  .section-label {
+    font-size: 10px;
+    color: #6b7290;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    font-family: 'Consolas', monospace;
+    margin-bottom: 8px;
+  }
+  .site-name {
+    font-size: 14px;
+    font-weight: 600;
+    color: #e8eaf2;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .site-url {
+    font-size: 11px;
+    color: #6b7290;
+    margin-top: 3px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .site-duration {
+    display: inline-block;
+    margin-top: 6px;
+    font-size: 11px;
+    font-family: 'Consolas', monospace;
+    background: rgba(79,142,247,0.1);
+    color: #4f8ef7;
+    padding: 2px 8px;
+    border-radius: 10px;
+    border: 1px solid rgba(79,142,247,0.2);
+  }
+
+  .footer {
+    padding: 12px 18px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .footer-note { font-size: 11px; color: #6b7290; }
+  .open-btn {
+    font-size: 11px;
+    background: rgba(79,142,247,0.1);
+    color: #4f8ef7;
+    border: 1px solid rgba(79,142,247,0.2);
+    border-radius: 6px;
+    padding: 5px 10px;
+    cursor: pointer;
+    font-family: inherit;
+    transition: all 0.15s;
+  }
+  .open-btn:hover { background: rgba(79,142,247,0.2); }
+  .not-connected-msg {
+    padding: 14px 18px;
+    font-size: 12px;
+    color: #6b7290;
+    line-height: 1.6;
+  }
+  .not-connected-msg strong { color: #fb923c; }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div>
+    <div class="logo">DayLens</div>
+    <div class="logo-sub">BROWSER TRACKER</div>
+  </div>
+</div>
+
+<div class="status-row">
+  <div class="dot" id="status-dot"></div>
+  <div class="status-text" id="status-text">Checking connection...</div>
+</div>
+
+<div id="main-content"></div>
+
+<div class="footer">
+  <div class="footer-note">Tracks sites you visit</div>
+</div>
+
+<script>
+let startTime = Date.now();
+let timerInterval = null;
+
+function msToHuman(ms) {
+  const h = Math.floor(ms / 3600000);
+  const m = Math.floor((ms % 3600000) / 60000);
+  const s = Math.floor((ms % 60000) / 1000);
+  if (h > 0) return `${h}h ${m}m`;
+  if (m > 0) return `${m}m ${s}s`;
+  return `${s}s`;
+}
+
+function render(connected, url, title, tabStart) {
+  const dot = document.getElementById('status-dot');
+  const statusText = document.getElementById('status-text');
+  const content = document.getElementById('main-content');
+
+  if (connected) {
+    dot.classList.add('connected');
+    statusText.innerHTML = '<strong>Connected</strong> to DayLens';
+
+    let domain = '';
+    try { domain = new URL(url || '').hostname.replace(/^www\./, ''); } catch(e) {}
+
+    const isTrackable = url && !url.startsWith('chrome://') && !url.startsWith('brave://') && !url.startsWith('about:');
+
+    if (isTrackable && domain) {
+      startTime = tabStart || Date.now();
+      content.innerHTML = `
+        <div class="current-site">
+          <div class="section-label">Now Tracking</div>
+          <div class="site-name">${domain}</div>
+          <div class="site-url">${(title || url || '').substring(0, 60)}</div>
+          <div class="site-duration" id="duration-badge">0s</div>
+        </div>
+      `;
+      if (timerInterval) clearInterval(timerInterval);
+      timerInterval = setInterval(() => {
+        const el = document.getElementById('duration-badge');
+        if (el) el.textContent = msToHuman(Date.now() - startTime);
+      }, 1000);
+    } else {
+      content.innerHTML = `
+        <div class="current-site">
+          <div class="section-label">Now Tracking</div>
+          <div class="site-name" style="color:#6b7290">No trackable page active</div>
+          <div class="site-url">New tab or browser UI</div>
+        </div>
+      `;
+    }
+  } else {
+    dot.classList.remove('connected');
+    statusText.innerHTML = '<strong style="color:#f87171">Not connected</strong>';
+    content.innerHTML = `
+      <div class="not-connected-msg">
+        <strong>DayLens desktop app isn't running.</strong><br><br>
+        Start the app with <code>npm start</code> in the daylens folder, then reload this extension.
+      </div>
+    `;
+  }
+}
+
+// Ask background for current state
+chrome.runtime.sendMessage({ type: 'get_state' }, (resp) => {
+  if (chrome.runtime.lastError || !resp) {
+    render(false);
+    return;
+  }
+  render(resp.connected, resp.url, resp.title, resp.tabStart);
+});
+</script>
+</body>
+</html>

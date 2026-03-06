@@ -1,0 +1,25 @@
+DayLens Browser Extension — Installation for Brave
+====================================================
+
+1. Open Brave and go to:  brave://extensions
+
+2. Turn ON "Developer mode" (toggle in the top-right corner)
+
+3. Click "Load unpacked"
+
+4. Select this entire folder (daylens-extension)
+
+5. The DayLens icon will appear in your toolbar
+
+6. Make sure the DayLens desktop app is running (npm start) before using
+
+That's it! Websites you visit will now appear in your DayLens dashboard
+alongside your native app usage.
+
+HOW IT WORKS
+------------
+- The extension connects to DayLens via a local WebSocket on port 43821
+- Only YOU can access this — it never goes to the internet
+- When you switch tabs, the extension logs the site and duration
+- Data appears in the DayLens "Today" dashboard under the site's domain name
+- New tab pages, browser settings, and extension pages are NOT tracked

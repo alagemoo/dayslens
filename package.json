@@ -1,0 +1,17 @@
+{
+  "name": "daylens",
+  "version": "0.1.0",
+  "description": "Know where your day actually goes",
+  "main": "src/main.js",
+  "scripts": {
+    "start": "electron ."
+  },
+  "dependencies": {
+    "sql.js": "^1.12.0"
+  },
+  "devDependencies": {
+    "electron": "^29.0.0"
+  },
+  "author": "DayLens",
+  "license": "MIT"
+}

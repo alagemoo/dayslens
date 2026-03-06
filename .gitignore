@@ -1,0 +1,8 @@
+node_modules/
+dist/
+out/
+*.bak
+*.db
+userData/
+.DS_Store
+Thumbs.db
