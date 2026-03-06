@@ -74,7 +74,7 @@ Everything stays **100% on your device**. No cloud. No account. No subscription.
 
 | Day Log | All Apps |
 |---|---|
-| *![Day Log Screen](image-2.png))* | *(![All Apps Screen](image-3.png))* |
+| *![Day Log Screen](image-2.png))* | *(![All Apps Screen](image-3.png)* |
 
 ---
 
