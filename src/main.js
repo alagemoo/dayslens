@@ -8,7 +8,8 @@ const initSqlJs = require('sql.js');
 
 let db = null;
 const userDataPath = app.getPath('userData');
-const DB_PATH = path.join(userDataPath, 'daylens.db');
+const DB_PATH     = path.join(userDataPath, 'daylens.db');
+
 
 async function initDB() {
   const SQL = await initSqlJs();
@@ -25,7 +26,8 @@ async function initDB() {
       window_title TEXT,
       url          TEXT,
       started_at   INTEGER NOT NULL,
-      ended_at     INTEGER
+      ended_at     INTEGER,
+      is_background INTEGER NOT NULL DEFAULT 0
     );
     CREATE INDEX IF NOT EXISTS idx_activity_started ON activity(started_at);
     CREATE TABLE IF NOT EXISTS categories (
@@ -46,7 +48,7 @@ async function initDB() {
     ['Notion','Documents',1],['Obsidian','Documents',1],
     ['Spotify','Entertainment',0],['Steam','Entertainment',0],
     ['Twitter','Social Media',0],['Reddit','Social Media',0],
-    ['Windows Explorer','System',1],['Task Manager','System',1],
+    ['Windows Explorer','System',1],['Task Manager','System',1],['Taskmgr','System',1],
     ['PowerShell','System',1],['Command Prompt','System',1],
     // Browser domains
     ['github.com','Deep Work',1],['stackoverflow.com','Deep Work',1],
@@ -67,24 +69,120 @@ async function initDB() {
     ['instagram.com','Social Media',0],['tiktok.com','Social Media',0],
     ['gmail.com','Communication',1],['outlook.live.com','Communication',1],
     ['slack.com','Communication',1],['meet.google.com','Communication',1],
-    ['zoom.us','Communication',1],['linkedin.com','Communication',1],
+    ['zoom.us','Communication',1],['linkedin.com','Social Media',0],
     ['google.com','Browsing',1],['wikipedia.org','Browsing',1],
+    ['notebooklm.google.com','Learning',1],
+    ['keep.google.com','Documents',1],
+    ['calendar.google.com','Documents',1],
+    // Noise / utility apps
+    ['Snipping Tool','System',0],
+    ['Internet Download Manager','Other',0],
+    ['Internet Download Manager (IDM)','Other',0],
+    ['Calculator','System',0],
+    ['Cortana','System',0],
+    ['Microsoft Store','Browsing',0],
+    // Office process name variants (as returned by PowerShell/Windows)
+    ['WINWORD','Documents',1],['EXCEL','Documents',1],['POWERPNT','Documents',1],
+    ['ONENOTE','Documents',1],['MSACCESS','Documents',1],['OUTLOOK','Communication',1],
+    ['MSPUB','Documents',1],['VISIO','Documents',1],
+    ['winword','Documents',1],['excel','Documents',1],['powerpnt','Documents',1],
+    // Adobe apps
+    ['Adobe Acrobat','Documents',1],['Acrobat','Documents',1],
+    ['Adobe Premiere Pro','Deep Work',1],['Adobe After Effects','Deep Work',1],
+    ['Adobe Audition','Deep Work',1],['Adobe InDesign','Documents',1],
+    // Common productivity apps
+    ['Notepad','Documents',1],['Notepad++','Documents',1],
+    ['LibreOffice Writer','Documents',1],['LibreOffice Calc','Documents',1],
+    ['LibreOffice Impress','Documents',1],
   ];
+  // Safe migrations for existing DBs
+  try { db.run('ALTER TABLE activity ADD COLUMN is_background INTEGER NOT NULL DEFAULT 0'); } catch(e) {}
+  // Add user_override column if not present (safe migration for existing DBs)
+  try { db.run('ALTER TABLE categories ADD COLUMN user_override INTEGER NOT NULL DEFAULT 0'); } catch(e) {}
+
+  // State table — stores a single row with the last known alive timestamp.
+  // Used by startup cleanup to distinguish "app was running" vs "battery died/crashed".
+  db.run(`CREATE TABLE IF NOT EXISTS app_state (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+  )`);  db.run(`INSERT OR IGNORE INTO app_state (key, value) VALUES ('last_alive', '${Date.now()}')`);
+
   for (const [a, c, p] of seeds) {
-    db.run(`INSERT OR IGNORE INTO categories (app_name, category, productive) VALUES (?,?,?)`, [a, c, p]);
+    // System seeds always update UNLESS the user has manually overridden this entry
+    // This ensures corrections (like LinkedIn → Social Media) take effect on existing DBs
+    db.run(
+      'INSERT INTO categories (app_name, category, productive, user_override) VALUES (?,?,?,0) ' +
+      'ON CONFLICT(app_name) DO UPDATE SET category=excluded.category, productive=excluded.productive ' +
+      'WHERE user_override=0',
+      [a, c, p]
+    );
   }
 
   // ── Startup cleanup: close any stale open activities ──────────────────────
-  // Caps unclosed rows at 15 min max, clamped to their day's midnight.
-  // Prevents crashed sessions from bleeding hours into today's totals.
+  // Uses last_alive timestamp to distinguish two cases:
+  //   A) Row started BEFORE last_alive → app was running, cap at 15min (normal crash)
+  //   B) Row started AFTER last_alive  → created after the laptop died / battery ran out
+  //                                      (service worker phantom reconnect). Cap at 0.
   const IDLE_MAX_MS = 15 * 60 * 1000;
   const _now = Date.now();
+
+  // Read last known alive time from state table
+  let _lastAlive = _now - IDLE_MAX_MS; // safe default
+  try {
+    const _stateRows = db.exec("SELECT value FROM app_state WHERE key='last_alive'");
+    if (_stateRows.length && _stateRows[0].values.length) {
+      _lastAlive = parseInt(_stateRows[0].values[0][0], 10) || _lastAlive;
+    }
+  } catch(e) {}
+
+  // Case A: rows that existed while app was alive — cap at 15min
   db.run(`
     UPDATE activity
     SET ended_at = MIN(started_at + ${IDLE_MAX_MS},
                        (((started_at / 86400000) + 1) * 86400000))
     WHERE ended_at IS NULL
+      AND started_at <= ${_lastAlive}
       AND started_at < ${_now - IDLE_MAX_MS}
+  `);
+
+  // Case B: rows started AFTER last_alive — phantom rows from SW reconnects
+  // while the laptop was off. Collapse to zero so they're invisible (< 1s filter).
+  db.run(`
+    UPDATE activity
+    SET ended_at = started_at
+    WHERE ended_at IS NULL
+      AND started_at > ${_lastAlive}
+  `);
+
+  // ── Re-categorize known mis-classified entries in existing DBs ──────────────
+  // IP-address domains (server panels) should be Deep Work, not Other
+  db.run(`
+    UPDATE categories
+    SET category='Deep Work', productive=1
+    WHERE user_override=0
+      AND category='Other'
+      AND (
+        app_name GLOB '[0-9]*.[0-9]*.[0-9]*.[0-9]*'
+        OR app_name LIKE '%vpspanel%'
+        OR app_name LIKE '%web-hosting%'
+        OR app_name LIKE '%cpanel%'
+        OR app_name LIKE '%plesk%'
+        OR app_name LIKE '%webmin%'
+      )
+  `);
+
+  // ── Purge spurious "Idle" rows created when screen was locked ─────────────
+  // Previous versions of DayLens tracked Windows "System Idle Process" as an
+  // activity called "Idle". These rows represent time the screen was OFF and
+  // should not appear in the Day Log. We collapse them to zero duration so
+  // they are filtered out by the >= 1000ms display filter.
+  // This runs once on every startup — safe to run on old databases.
+  db.run(`
+    UPDATE activity
+    SET ended_at = started_at
+    WHERE LOWER(app_name) IN ('idle','system idle process','dwm','winlogon',
+                               'logonui','lockapp','screensaver','unknown')
+      AND (ended_at IS NULL OR ended_at - started_at > 60000)
   `);
 
   saveDB();
@@ -136,17 +234,36 @@ function startWebSocketServer() {
     socket.isAlive = true;
     wsClients.add(socket);
 
+    // Buffer for incomplete frames across TCP packets
+    let _frameBuffer = Buffer.alloc(0);
     socket.on('data', buf => {
-      try {
-        const msg = decodeWsFrame(buf);
-        if (!msg) return;
-        const data = JSON.parse(msg);
-        handleBrowserEvent(data);
-      } catch (e) {}
+      _frameBuffer = Buffer.concat([_frameBuffer, buf]);
+      const { messages, remaining } = decodeWsFrames(_frameBuffer);
+      _frameBuffer = remaining;
+      for (const msg of messages) {
+        try { handleBrowserEvent(JSON.parse(msg)); } catch(e) {}
+      }
     });
 
-    socket.on('close', () => wsClients.delete(socket));
-    socket.on('error', () => { socket.destroy(); wsClients.delete(socket); });
+    socket.on('close', () => {
+      wsClients.delete(socket);
+      const _now = Date.now();
+      if (currentBrowserActivity) {
+        db.run(`UPDATE activity SET ended_at=? WHERE id=?`, [_now, currentBrowserActivity.id]);
+        currentBrowserActivity = null;
+      }
+      endAllBackgroundSessions(_now);
+      browserWindowFocused = false;
+    });
+    socket.on('error', () => {
+      socket.destroy();
+      wsClients.delete(socket);
+      if (currentBrowserActivity) {
+        db.run(`UPDATE activity SET ended_at=? WHERE id=?`, [Date.now(), currentBrowserActivity.id]);
+        currentBrowserActivity = null;
+      }
+      browserWindowFocused = false;
+    });
   });
 
   wsServer.listen(WS_PORT, '127.0.0.1', () => {
@@ -158,23 +275,97 @@ function startWebSocketServer() {
   });
 }
 
-function decodeWsFrame(buf) {
-  if (buf.length < 2) return null;
-  const masked = (buf[1] & 0x80) !== 0;
-  let payloadLen = buf[1] & 0x7f;
-  let offset = 2;
-  if (payloadLen === 126) { payloadLen = buf.readUInt16BE(2); offset = 4; }
-  else if (payloadLen === 127) { payloadLen = Number(buf.readBigUInt64BE(2)); offset = 10; }
-  if (!masked) return buf.slice(offset, offset + payloadLen).toString('utf8');
-  const mask = buf.slice(offset, offset + 4); offset += 4;
-  const payload = Buffer.alloc(payloadLen);
-  for (let i = 0; i < payloadLen; i++) payload[i] = buf[offset + i] ^ mask[i % 4];
-  return payload.toString('utf8');
+// Decode ALL WebSocket frames from a buffer.
+// Returns { messages: string[], remaining: Buffer }
+// TCP can deliver multiple frames in one packet, or split a frame across packets.
+function decodeWsFrames(buf) {
+  const messages = [];
+  let pos = 0;
+  while (pos < buf.length) {
+    if (buf.length - pos < 2) break; // need at least 2 header bytes
+    const masked   = (buf[pos + 1] & 0x80) !== 0;
+    let payloadLen =  buf[pos + 1] & 0x7f;
+    let offset     = pos + 2;
+    if (payloadLen === 126) {
+      if (buf.length - pos < 4) break;
+      payloadLen = buf.readUInt16BE(pos + 2);
+      offset = pos + 4;
+    } else if (payloadLen === 127) {
+      if (buf.length - pos < 10) break;
+      payloadLen = Number(buf.readBigUInt64BE(pos + 2));
+      offset = pos + 10;
+    }
+    const frameEnd = offset + (masked ? 4 : 0) + payloadLen;
+    if (frameEnd > buf.length) break; // incomplete frame — wait for next TCP packet
+    let text;
+    if (!masked) {
+      text = buf.slice(offset, offset + payloadLen).toString('utf8');
+    } else {
+      const mask    = buf.slice(offset, offset + 4);
+      const payload = Buffer.alloc(payloadLen);
+      for (let i = 0; i < payloadLen; i++) payload[i] = buf[offset + 4 + i] ^ mask[i % 4];
+      text = payload.toString('utf8');
+    }
+    messages.push(text);
+    pos = frameEnd;
+  }
+  return { messages, remaining: buf.slice(pos) };
 }
 
 // ── Browser event handler ─────────────────────────────────────────────────────
 let currentBrowserActivity = null;
 let browserWindowFocused = true; // track if browser window has focus
+
+// ── Background audio sessions ─────────────────────────────────────────────────
+// Key = url, Value = { id, appName, url, title, startedAt, lastSeen }
+// Tracks tabs that are audible in the background (webinars, tutorial videos)
+// while the user is focused on another window/app.
+const backgroundAudioSessions = new Map();
+
+// Domains we consider worth tracking as background audio
+const MEETING_DOMAINS = [
+  'zoom.us','meet.google.com','teams.microsoft.com','webex.com',
+  'gotomeeting.com','bluejeans.com','whereby.com','around.co',
+  'discord.com','skype.com','meet.jit.si'
+];
+const LEARNING_VIDEO_DOMAINS = [
+  'youtube.com','youtu.be','vimeo.com','loom.com',
+  'udemy.com','coursera.org','khanacademy.org','linkedin.com/learning',
+  'pluralsight.com','skillshare.com','egghead.io'
+];
+
+function isBackgroundTrackable(domain, title) {
+  const d = (domain || '').toLowerCase();
+  const t = (title  || '').toLowerCase();
+  // Always track live meeting/webinar domains
+  if (MEETING_DOMAINS.some(m => d.includes(m))) return true;
+  // Track learning video domains
+  if (LEARNING_VIDEO_DOMAINS.some(m => d.includes(m))) return true;
+  return false;
+}
+
+function startBackgroundSession(url, domain, title, now) {
+  if (backgroundAudioSessions.has(url)) return; // already tracking
+  const appName = domain || url;
+  db.run(
+    'INSERT INTO activity (app_name, window_title, url, started_at, is_background) VALUES (?,?,?,?,1)',
+    [appName, title || appName, url, now]
+  );
+  const rows = db.exec('SELECT last_insert_rowid() as id');
+  const id = rows[0].values[0][0];
+  backgroundAudioSessions.set(url, { id, appName, url, title, startedAt: now, lastSeen: now });
+}
+
+function endBackgroundSession(url, now) {
+  const session = backgroundAudioSessions.get(url);
+  if (!session) return;
+  db.run('UPDATE activity SET ended_at=? WHERE id=?', [now, session.id]);
+  backgroundAudioSessions.delete(url);
+}
+
+function endAllBackgroundSessions(now) {
+  for (const [url] of backgroundAudioSessions) endBackgroundSession(url, now);
+}
 
 function handleBrowserEvent(data) {
   if (!db) return;
@@ -189,15 +380,39 @@ function handleBrowserEvent(data) {
       db.run(`UPDATE activity SET ended_at=? WHERE id=?`, [now, currentBrowserActivity.id]);
       currentBrowserActivity = null;
     }
+    // Background audio sessions CONTINUE — user left the browser but
+    // the webinar/video is still playing. Don't end them on blur.
     return;
   }
 
-  // Heartbeat — just refresh the idle timer so the open row stays valid
+  // Heartbeat — refresh idle timers for both active and background sessions
   if (type === 'heartbeat') {
-    if (currentBrowserActivity) {
-      // Update startedAt reference so IDLE_MS cap doesn't prematurely close it
-      currentBrowserActivity.lastHeartbeat = now;
+    if (currentBrowserActivity) currentBrowserActivity.lastHeartbeat = now;
+    // Update lastSeen for all background sessions so they don't time out
+    for (const [, session] of backgroundAudioSessions) session.lastSeen = now;
+    return;
+  }
+
+  // Background audio — a non-active tab is playing audio (webinar, tutorial, meeting)
+  if (type === 'background_audio') {
+    if (!url || !isBackgroundTrackable(domain, title)) return;
+    const session = backgroundAudioSessions.get(url);
+    if (session) {
+      // Already tracking — update title if changed and refresh lastSeen
+      session.lastSeen = now;
+      if (title && title !== session.title) {
+        db.run('UPDATE activity SET window_title=? WHERE id=?', [title, session.id]);
+        session.title = title;
+      }
+    } else {
+      startBackgroundSession(url, domain, title, now);
     }
+    return;
+  }
+
+  // Background audio ended — tab muted, paused, closed, or became active
+  if (type === 'background_audio_end') {
+    endBackgroundSession(url, now);
     return;
   }
 
@@ -233,6 +448,9 @@ function handleBrowserEvent(data) {
       [appName, title || appName, url, now]);
     const rows = db.exec(`SELECT last_insert_rowid() as id`);
     currentBrowserActivity = { id: rows[0].values[0][0], appName, url, title, startedAt: now };
+    // Trigger AI classification if this domain lands in Other
+    const _cat = guessCategory(appName, title);
+    if (_cat.category === 'Other') aiClassify(appName, title).catch(() => {});
 
   } else if (type === 'tab_hidden' || type === 'browser_hidden') {
     if (currentBrowserActivity) {
@@ -348,6 +566,233 @@ const ENTERTAINMENT_TITLE_KEYWORDS = [
   'joe rogan','hot ones','interview with','celebrity interview',
 ];
 
+// ── Auto-labelling (free, no API key) ────────────────────────────────────────
+// For unknown domains: fetch the site's meta description/keywords via HTTP,
+// then classify locally using keyword matching.
+// For unknown desktop apps: expanded keyword heuristics.
+// Results cached permanently in DB — each app/domain classified only once.
+
+const AUTO_LABEL_QUEUE  = new Set();
+const AUTO_LABEL_BUSY   = { v: false };
+
+// ── Local keyword classifier ──────────────────────────────────────────────────
+// Takes any text (meta description, app name, window title) and returns a category
+function classifyFromText(text) {
+  const t = (text || '').toLowerCase();
+
+  const rules = [
+    // Deep Work signals
+    { cat: 'Deep Work', prod: 1, kw: [
+      'code','coding','developer','development','programming','software','api',
+      'database','devops','deploy','repository','github','git','terminal','cli',
+      'ide','editor','debug','compiler','framework','library','sdk','saas',
+      'design tool','figma','sketch','adobe','photoshop','illustrator','prototype',
+      'wireframe','ux','ui design','dashboard','analytics','data analysis',
+      'spreadsheet','accounting','invoice','crm','project management','task',
+      'kanban','agile','scrum','documentation','technical','engineering','architect',
+      'server','cloud','aws','azure','gcp','kubernetes','docker','devtool',
+      'postman','jira','confluence','bitbucket','gitlab','vercel','netlify',
+      'supabase','heroku','linear','asana','trello','clickup','monday',
+      'github','paystack','flutterwave','stripe','paypal','fintech',
+      'bank','finance','accounting','bookkeeping','quickbooks','xero','sage',
+    ]},
+    // Learning signals
+    { cat: 'Learning', prod: 1, kw: [
+      'learn','tutorial','course','lesson','lecture','education','teach',
+      'training','bootcamp','certification','exam','quiz','study','university',
+      'academic','science','mathematics','history','philosophy','biology',
+      'chemistry','physics','psychology','economics','research','knowledge',
+      'how to','guide','explained','understanding','introduction to','beginner',
+      'advanced','masterclass','workshop','webinar','e-learning','mooc',
+      'textbook','textbooks','scholarship','skills','self-improvement',
+      'udemy','coursera','edx','pluralsight','skillshare','khanacademy',
+      'duolingo','quizlet','anki','brilliant','codecademy','freecodecamp',
+    ]},
+    // Communication signals
+    { cat: 'Communication', prod: 1, kw: [
+      'email','inbox','message','chat','messaging','collaboration','meeting',
+      'video call','conference','team','slack','workspace','discuss','thread',
+      'notification','contact','calendar','schedule','appointment','call',
+      'outlook','gmail','mail','zoom','teams','meet','telegram','whatsapp',
+      'signal','discord','skype','webex','loom','calendly',
+    ]},
+    // Documents signals
+    { cat: 'Documents', prod: 1, kw: [
+      'document','word processor','spreadsheet','presentation','notes','note-taking',
+      'writing','draft','report','proposal','template','pdf','file manager',
+      'cloud storage','drive','dropbox','onedrive','backup','sync',
+      'notion','obsidian','roam','evernote','bear','typora','onenote',
+    ]},
+    // Entertainment signals
+    { cat: 'Entertainment', prod: 0, kw: [
+      'movie','film','watch','stream','streaming','episode','season','series',
+      'anime','cartoon','comedy','drama','action','thriller','horror',
+      'music','song','playlist','album','artist','lyrics','concert',
+      'game','gaming','play','esports','twitch','sport','football','basketball',
+      'celebrity','entertainment','fun','funny','humor','meme','viral',
+      'vlog','lifestyle','travel','food','recipe','cooking show',
+      'netflix','hulu','disney','hbo','prime video','peacock','paramount',
+      'spotify','apple music','soundcloud','deezer','tidal','pandora',
+      'steam','epic games','origin','battle.net','roblox','minecraft',
+    ]},
+    // Social Media signals
+    { cat: 'Social Media', prod: 0, kw: [
+      'social network','social media','followers','following','likes','post',
+      'share','feed','timeline','profile','connect','friend','influencer',
+      'community','forum','discussion','comment','react','trending',
+      'twitter','instagram','facebook','tiktok','snapchat','pinterest',
+      'reddit','tumblr','mastodon','threads','x.com',
+    ]},
+    // News/Browsing signals
+    { cat: 'Browsing', prod: 1, kw: [
+      'news','article','magazine','blog','journalist','press','media',
+      'breaking news','headline','opinion','editorial','weather','sports news',
+      'business news','technology news','health news','politics',
+      'bbc','cnn','techcrunch','medium','substack','wikipedia',
+    ]},
+    // System signals
+    { cat: 'System', prod: 0, kw: [
+      'system utility','antivirus','security','firewall','backup','cleaner',
+      'optimizer','driver','update','installer','setup','uninstall','registry',
+      'task manager','process','cpu','memory','storage','disk','monitor',
+      'control panel','device manager','activity monitor','system preferences',
+    ]},
+  ];
+
+  // Score each category by how many keywords match
+  const scores = {};
+  for (const rule of rules) {
+    scores[rule.cat] = { score: 0, prod: rule.prod };
+    for (const kw of rule.kw) {
+      if (t.includes(kw)) scores[rule.cat].score += 1;
+    }
+  }
+
+  // Pick highest score if it's meaningful
+  const best = Object.entries(scores)
+    .filter(([, v]) => v.score > 0)
+    .sort((a, b) => b[1].score - a[1].score)[0];
+
+  if (best && best[1].score >= 1) {
+    return { category: best[0], productive: best[1].prod === 1 };
+  }
+  return null;
+}
+
+// ── Fetch meta description from a website ────────────────────────────────────
+async function fetchSiteMeta(domain) {
+  return new Promise((resolve) => {
+    try {
+      const https = require('https');
+      const http  = require('http');
+      const url = `https://${domain}`;
+      const lib = url.startsWith('https') ? https : http;
+
+      const req = lib.get(url, {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (compatible; DayLens/1.0)',
+          'Accept': 'text/html',
+        },
+        timeout: 5000,
+      }, (res) => {
+        // Follow one redirect
+        if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+          resolve(fetchSiteMeta(res.headers.location.replace(/^https?:\/\/[^/]+/, '')));
+          return;
+        }
+        let html = '';
+        res.on('data', chunk => {
+          html += chunk;
+          if (html.length > 8000) req.destroy(); // only need the <head>
+        });
+        res.on('end', () => {
+          // Extract meta description
+          const descMatch = html.match(/<meta[^>]+name=["']description["'][^>]+content=["']([^"']{10,300})["']/i)
+                         || html.match(/<meta[^>]+content=["']([^"']{10,300})["'][^>]+name=["']description["']/i);
+          const kwMatch   = html.match(/<meta[^>]+name=["']keywords["'][^>]+content=["']([^"']{5,200})["']/i);
+          const titleMatch= html.match(/<title[^>]*>([^<]{3,100})<\/title>/i);
+          const ogDesc    = html.match(/<meta[^>]+property=["']og:description["'][^>]+content=["']([^"']{10,300})["']/i);
+
+          const combined = [
+            descMatch?.[1] || '',
+            kwMatch?.[1]   || '',
+            titleMatch?.[1]|| '',
+            ogDesc?.[1]    || '',
+          ].join(' ');
+
+          resolve(combined.trim() || null);
+        });
+      });
+      req.on('error', () => resolve(null));
+      req.on('timeout', () => { req.destroy(); resolve(null); });
+    } catch(e) {
+      resolve(null);
+    }
+  });
+}
+
+// ── Main auto-classify entry point ───────────────────────────────────────────
+async function aiClassify(appName, windowTitle) {
+  if (!appName) return null;
+  const key = appName.toLowerCase().trim();
+  if (AUTO_LABEL_QUEUE.has(key)) return null;
+  AUTO_LABEL_QUEUE.add(key);
+
+  // Check DB first — already classified?
+  if (db) {
+    const existing = db.exec(
+      `SELECT category, productive FROM categories WHERE lower(app_name) = lower(?)`,
+      [appName]
+    );
+    if (existing.length && existing[0].values.length) {
+      AUTO_LABEL_QUEUE.delete(key);
+      return null;
+    }
+  }
+
+  try {
+    let result = null;
+
+    // Step 1: Try classifying from the app name + window title alone
+    const nameText = `${appName} ${windowTitle || ''}`;
+    result = classifyFromText(nameText);
+
+    // Step 2: If it's a domain (contains a dot), fetch meta and classify from that
+    const isDomain = appName.includes('.') && !appName.includes(' ') && !appName.includes('\\');
+    if (!result && isDomain) {
+      console.log(`[DayLens] Fetching meta for unknown domain: ${appName}`);
+      const meta = await fetchSiteMeta(appName);
+      if (meta) {
+        result = classifyFromText(meta + ' ' + nameText);
+        if (result) console.log(`[DayLens] Meta classify "${appName}" → ${result.category}`);
+      }
+    }
+
+    // Step 3: If still unknown, default to Browsing for domains, Other for apps
+    if (!result) {
+      result = isDomain
+        ? { category: 'Browsing', productive: 1 }
+        : null; // leave desktop apps as Other if we can't figure them out
+    }
+
+    if (result && db) {
+      db.run(
+        'INSERT INTO categories (app_name, category, productive, user_override) VALUES (?,?,?,0) ' +
+        'ON CONFLICT(app_name) DO UPDATE SET category=excluded.category, productive=excluded.productive WHERE user_override=0',
+        [appName, result.category, result.productive ? 1 : 0]
+      );
+      saveDB();
+      console.log(`[DayLens] Auto-labelled "${appName}" → ${result.category}`);
+    }
+    return result;
+  } catch(e) {
+    console.log('[DayLens] Auto-label error:', e.message);
+    return null;
+  } finally {
+    AUTO_LABEL_QUEUE.delete(key);
+  }
+}
+
 // Per-domain smart rules: returns { category, productive } or null
 function smartDomainRule(domain, title) {
   const d = (domain || '').toLowerCase();
@@ -403,8 +848,16 @@ function smartDomainRule(domain, title) {
 
   // ── Docs / Notion / Writing ────────────────────────────────────────────────
   if (d.includes('docs.google.com')) return { category: 'Documents', productive: 1 };
+  if (d.includes('sheets.google.com') || d.includes('slides.google.com') ||
+      d.includes('drive.google.com') || d.includes('calendar.google.com')) {
+    return { category: 'Documents', productive: 1 };
+  }
+  if (d.includes('notebooklm.google.com')) return { category: 'Learning', productive: 1 };
   if (d.includes('notion.so')) return { category: 'Documents', productive: 1 };
-  if (d.includes('obsidian.md')) return { category: 'Documents', productive: 1 };
+  if (d.includes('obsidian.md') || d.includes('roamresearch.com') ||
+      d.includes('logseq.com') || d.includes('capacities.io')) {
+    return { category: 'Documents', productive: 1 };
+  }
 
   // ── AI Assistants ──────────────────────────────────────────────────────────
   // These are always Deep Work — using AI tools is productive by definition
@@ -427,6 +880,16 @@ function smartDomainRule(domain, title) {
   if (d.includes('linear.app') || d.includes('jira') || d.includes('trello.com') || d.includes('asana.com') || d.includes('clickup.com')) return { category: 'Deep Work', productive: 1 };
   if (d.includes('figma.com') || d.includes('dribbble.com') || d.includes('behance.net')) return { category: 'Deep Work', productive: 1 };
 
+  // ── Server / hosting admin panels ─────────────────────────────────────────
+  // IP addresses accessed in browser are almost always server admin/dev work
+  if (/^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}/.test(d)) return { category: 'Deep Work', productive: 1 };
+  // Hosting control panels
+  if (d.includes('cpanel') || d.includes('whm.') || d.includes('vpspanel') ||
+      d.includes('web-hosting') || d.includes('plesk') || d.includes('directadmin') ||
+      d.includes('webmin') || d.includes('panel.') || d.includes('.panel.')) {
+    return { category: 'Deep Work', productive: 1 };
+  }
+
   // ── Learning platforms ─────────────────────────────────────────────────────
   if (['udemy.com','coursera.org','edx.org','khanacademy.org','freecodecamp.org',
        'pluralsight.com','skillshare.com','linkedin.com/learning','brilliant.org',
@@ -439,7 +902,15 @@ function smartDomainRule(domain, title) {
   if (d.includes('outlook.') || d.includes('office.com')) return { category: 'Communication', productive: 1 };
   if (d.includes('slack.com')) return { category: 'Communication', productive: 1 };
   if (d.includes('teams.microsoft.com') || d.includes('meet.google.com') || d.includes('zoom.us')) return { category: 'Communication', productive: 1 };
-  if (d.includes('linkedin.com')) return { category: 'Communication', productive: 1 };
+  // LinkedIn is professional social networking — not the same as Slack/email
+  if (d.includes('linkedin.com')) {
+    // Only count as Deep Work if clearly job searching or posting content
+    if (t.includes('job') || t.includes('apply') || t.includes('posting') ||
+        t.includes('article') || t.includes('newsletter')) {
+      return { category: 'Deep Work', productive: 1 };
+    }
+    return { category: 'Social Media', productive: 0 };
+  }
   if (d.includes('discord.com') || d.includes('telegram.org') || d.includes('whatsapp.com')) return { category: 'Communication', productive: 0 };
 
   // ── Pure entertainment ─────────────────────────────────────────────────────
@@ -459,6 +930,12 @@ function smartDomainRule(domain, title) {
     // Podcasts that could be educational — use title
     if (LEARNING_TITLE_KEYWORDS.some(k => t.includes(k))) return { category: 'Learning', productive: 1 };
     return { category: 'Entertainment', productive: 0 };
+  }
+
+  // ── Download managers / CDN domains — not real work ─────────────────────
+  if (d.includes('cdn1.') || d.includes('cdn2.') || d.includes('.cdn.') ||
+      /^cdn\d*\./.test(d)) {
+    return { category: 'Other', productive: 0 };
   }
 
   return null; // no domain rule matched
@@ -500,17 +977,28 @@ function guessCategory(appName, title) {
   if (ENTERTAINMENT_TITLE_KEYWORDS.some(k => t.includes(k))) return { category: 'Entertainment', productive: 0 };
 
   // 6. Generic app name fallback
+  // IP addresses (server/admin panels) → Deep Work
+  if (/^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}/.test(n)) {
+    return { category: 'Deep Work', productive: 1 };
+  }
+  // Hosting/server control panels → Deep Work
+  if (n.includes('cpanel') || n.includes('whm') || n.includes('vpspanel') ||
+      n.includes('web-hosting') || n.includes('plesk') || n.includes('directadmin') ||
+      n.includes('admin panel') || n.includes('control panel') || n.includes('webmin')) {
+    return { category: 'Deep Work', productive: 1 };
+  }
   if (['code','vscode','visual studio','xcode','vim','neovim','emacs','figma','photoshop',
        'illustrator','blender','github','stackoverflow','linear','vercel','netlify',
        'postman','insomnia','terminal','iterm','warp','hyper'].some(k => n.includes(k))) {
     return { category: 'Deep Work', productive: 1 };
   }
   if (['slack','zoom','teams','discord','mail','outlook','telegram','gmail','meet',
-       'whatsapp','signal','skype'].some(k => n.includes(k))) {
+       'whatsapp','signal','skype','lync','webex','loom'].some(k => n.includes(k))) {
     return { category: 'Communication', productive: 1 };
   }
   if (['word','excel','powerpoint','notion','obsidian','docs','sheets','drive',
-       'pages','numbers','keynote','onenote','evernote','bear','craft'].some(k => n.includes(k))) {
+       'pages','numbers','keynote','onenote','evernote','bear','craft',
+       'winword','powerpnt','mspub','visio','libreoffice','notepad','acrobat'].some(k => n.includes(k))) {
     return { category: 'Documents', productive: 1 };
   }
   if (['chrome','firefox','safari','edge','brave','opera','arc','vivaldi'].some(k => n.includes(k))) {
@@ -546,10 +1034,23 @@ function isBrowserProcess(name) {
 }
 
 function startActivity(appName, windowTitle, url) {
+  // If PowerShell returned a blank app name, use the window title as fallback
+  // so the activity is at least labelled with something meaningful
+  // Use PowerShell process name directly. Only fall back to title parsing
+  // when PS returned nothing at all. Take the LAST segment of "File - AppName"
+  // since window titles in Windows use "filename - AppName" format.
+  const effectiveName = (appName && appName.trim() && appName !== 'Unknown')
+    ? appName
+    : (windowTitle
+        ? windowTitle.split(' - ').pop().trim().substring(0, 60) || 'Unknown'
+        : 'Unknown');
   db.run(`INSERT INTO activity (app_name, window_title, url, started_at) VALUES (?,?,?,?)`,
-    [appName, windowTitle || '', url || null, Date.now()]);
+    [effectiveName, windowTitle || '', url || null, Date.now()]);
   const rows = db.exec(`SELECT last_insert_rowid() as id`);
-  currentActivity = { id: rows[0].values[0][0], appName, windowTitle, startedAt: Date.now() };
+  currentActivity = { id: rows[0].values[0][0], appName: effectiveName, windowTitle, startedAt: Date.now() };
+  // Trigger AI classification for unknown apps (lands in Other) — async, non-blocking
+  const _c = guessCategory(effectiveName, windowTitle);
+  if (_c.category === 'Other') aiClassify(effectiveName, windowTitle).catch(() => {});
 }
 
 function endCurrentActivity() {
@@ -571,6 +1072,25 @@ function tick() {
   try {
     const now = Date.now();
 
+    // ── Browser heartbeat timeout ─────────────────────────────────────────────
+    if (currentBrowserActivity) {
+      const lastSeen = currentBrowserActivity.lastHeartbeat || currentBrowserActivity.startedAt;
+      if (now - lastSeen > 90000) {
+        db.run(`UPDATE activity SET ended_at=? WHERE id=?`, [lastSeen + 1000, currentBrowserActivity.id]);
+        currentBrowserActivity = null;
+        browserWindowFocused = false;
+      }
+    }
+
+    // ── Background audio session timeouts ─────────────────────────────────────
+    // End any background session we haven't heard from in 90s (audio stopped/tab closed)
+    for (const [url, session] of backgroundAudioSessions) {
+      if (now - session.lastSeen > 90000) {
+        db.run('UPDATE activity SET ended_at=? WHERE id=?', [session.lastSeen + 1000, session.id]);
+        backgroundAudioSessions.delete(url);
+      }
+    }
+
     // ── Midnight day-rollover ─────────────────────────────────────────────────
     const todayStr = new Date().toDateString();
     if (todayStr !== lastTickDate) {
@@ -585,6 +1105,8 @@ function tick() {
         db.run(`UPDATE activity SET ended_at=? WHERE id=?`, [midnightTs, currentBrowserActivity.id]);
         currentBrowserActivity = null;
       }
+      // Also end all background audio sessions at midnight
+      endAllBackgroundSessions(midnightTs);
       lastTickDate = todayStr;
       lastActiveTime = now;
       saveDB();
@@ -609,8 +1131,32 @@ function tick() {
 
     const win = getActiveWindow();
     if (!win) return;
-    const appName = (win.owner?.name || 'Unknown').trim();
+    const rawAppName  = (win.owner?.name || '').trim();
     const windowTitle = (win.title || '').trim();
+
+    // ── Idle / lock-screen detection ─────────────────────────────────────────
+    // Windows reports PID 0 ("Idle" / "System Idle Process") when the screen is
+    // locked or no user window is in the foreground. We must NOT create activity
+    // rows for this — it would fill the Day Log with fake "Idle" time.
+    const SYSTEM_IDLE_NAMES = ['idle','system idle process','system','dwm','winlogon',
+      'logonui','lockapp','screensaver','screen saver','windows default lock screen'];
+    const lowerRaw = rawAppName.toLowerCase();
+    if (!rawAppName || rawAppName === 'Unknown' ||
+        SYSTEM_IDLE_NAMES.some(n => lowerRaw === n || lowerRaw.includes(n))) {
+      // Screen is locked / no foreground window — end whatever was open and stop
+      if (currentActivity) endCurrentActivity();
+      return;
+    }
+
+    // If PowerShell returned a non-idle but still blank effective name,
+    // derive from window title as fallback — take the LAST segment since
+    // Windows uses "filename - AppName" format
+    const appName = rawAppName !== 'Unknown'
+      ? rawAppName
+      : (windowTitle ? windowTitle.split(' - ').pop().trim().substring(0, 60) || null : null);
+
+    // Skip if we still have nothing meaningful
+    if (!appName) return;
 
     if (appName.toLowerCase().includes('electron') || appName.toLowerCase().includes('daylens')) return;
 
@@ -634,14 +1180,31 @@ function tick() {
   } catch (e) {}
 }
 
+// ── Alive heartbeat — written to DB every 60s ─────────────────────────────
+// Allows startup cleanup to know the last moment the app was genuinely running.
+// If the laptop dies, this timestamp stays frozen at the last write.
+let _aliveHeartbeatInterval = null;
+function writeAliveTimestamp() {
+  if (!db) return;
+  try {
+    db.run("INSERT OR REPLACE INTO app_state (key, value) VALUES ('last_alive', ?)", [Date.now().toString()]);
+    saveDB();
+  } catch(e) {}
+}
+
 function startTracking() {
   if (trackingInterval) return;
   setTimeout(tick, 1000);
   trackingInterval = setInterval(tick, POLL_MS);
+  // Write alive timestamp immediately and then every 60s
+  writeAliveTimestamp();
+  _aliveHeartbeatInterval = setInterval(writeAliveTimestamp, 60 * 1000);
 }
 
 function stopTracking() {
   if (trackingInterval) { clearInterval(trackingInterval); trackingInterval = null; }
+  if (_aliveHeartbeatInterval) { clearInterval(_aliveHeartbeatInterval); _aliveHeartbeatInterval = null; }
+  writeAliveTimestamp(); // final write on clean shutdown
   endCurrentActivity();
   if (currentBrowserActivity) {
     db.run(`UPDATE activity SET ended_at=? WHERE id=?`, [Date.now(), currentBrowserActivity.id]);
@@ -668,7 +1231,8 @@ ipcMain.handle('get-today', () => {
   // Fetch all activities that overlap today (started today OR started before today but end after midnight)
   const rows = db.exec(`
     SELECT app_name, window_title, url, started_at,
-           COALESCE(ended_at, ${Date.now()}) AS ended_at
+           COALESCE(ended_at, ${Date.now()}) AS ended_at,
+           COALESCE(is_background, 0) AS is_background
     FROM activity
     WHERE COALESCE(ended_at, ${Date.now()}) > ${dayStart}
       AND started_at < ${dayEnd}
@@ -680,7 +1244,7 @@ ipcMain.handle('get-today', () => {
     obj.started_at = Math.max(obj.started_at, dayStart);
     obj.ended_at   = Math.min(obj.ended_at,   dayEnd);
     return obj;
-  }).filter(r => r.ended_at > r.started_at);
+  }).filter(r => (r.ended_at - r.started_at) >= 1000); // ignore sub-1s noise
 });
 
 ipcMain.handle('get-summary', (_, days = 1) => {
@@ -694,7 +1258,8 @@ ipcMain.handle('get-summary', (_, days = 1) => {
   // Pull raw rows so we can cap each one at its day boundary
   const rows = db.exec(`
     SELECT app_name, url, window_title, started_at,
-           COALESCE(ended_at, ${Date.now()}) AS ended_at
+           COALESCE(ended_at, ${Date.now()}) AS ended_at,
+           COALESCE(is_background, 0) AS is_background
     FROM activity
     WHERE COALESCE(ended_at, ${Date.now()}) > ${since}
       AND started_at < ${dayEnd}
@@ -710,6 +1275,7 @@ ipcMain.handle('get-summary', (_, days = 1) => {
     const e = Math.min(obj.ended_at,   dayEnd);
     const dur = Math.max(0, e - s);
     if (dur <= 0) continue;
+    if (obj.is_background) continue; // background audio shown in Day Log only
     if (!appMap[obj.app_name]) {
       appMap[obj.app_name] = { app_name: obj.app_name, url: obj.url, window_title: obj.window_title, total_ms: 0 };
     }
@@ -733,7 +1299,8 @@ ipcMain.handle('get-weekly', () => {
       SELECT app_name, window_title, started_at, COALESCE(ended_at, ${now}) AS ended_at
       FROM activity
       WHERE COALESCE(ended_at, ${now}) > ${dayStart}
-        AND started_at < ${dayEnd}`) : [];
+        AND started_at < ${dayEnd}
+        AND COALESCE(is_background, 0) = 0`) : [];
     const appMap = {};
     if (rows.length) {
       for (const v of rows[0].values) {
@@ -767,7 +1334,8 @@ ipcMain.handle('get-day-rows', (_, offset = 0) => {
   // Include activities that overlap the day, not just those that started in it
   const rows = db.exec(`
     SELECT app_name, window_title, url, started_at,
-           COALESCE(ended_at, ${Date.now()}) AS ended_at
+           COALESCE(ended_at, ${Date.now()}) AS ended_at,
+           COALESCE(is_background, 0) AS is_background
     FROM activity
     WHERE COALESCE(ended_at, ${Date.now()}) > ${dayStart}
       AND started_at < ${dayEnd}
@@ -783,11 +1351,27 @@ ipcMain.handle('get-day-rows', (_, offset = 0) => {
 });
 ipcMain.handle('get-ws-port', () => WS_PORT);
 
+// Returns ALL rows in categories table so renderer can do local lookups
+// without an IPC round-trip per row.
+ipcMain.handle('get-user-categories', () => {
+  if (!db) return {};
+  const rows = db.exec('SELECT app_name, category, productive FROM categories');
+  if (!rows.length) return {};
+  const map = {};
+  for (const [app, cat, prod] of rows[0].values) {
+    map[app.toLowerCase()] = { category: cat, productive: prod };
+  }
+  return map;
+});
+
 ipcMain.handle('set-category', (_, appName, category, productive) => {
   if (!db) return false;
-  db.run(`INSERT INTO categories (app_name, category, productive) VALUES (?,?,?)
-          ON CONFLICT(app_name) DO UPDATE SET category=excluded.category, productive=excluded.productive`,
-    [appName, category, productive ? 1 : 0]);
+  // user_override=1 means this won't be overwritten by future seed updates
+  db.run(
+    'INSERT INTO categories (app_name, category, productive, user_override) VALUES (?,?,?,1) ' +
+    'ON CONFLICT(app_name) DO UPDATE SET category=excluded.category, productive=excluded.productive, user_override=1',
+    [appName, category, productive ? 1 : 0]
+  );
   saveDB();
   return true;
 });
@@ -831,10 +1415,12 @@ function buildSummaryData() {
   // Use boundary-capped raw rows (same approach as get-summary)
   const rawRows = db.exec(`
     SELECT app_name, MAX(window_title) AS window_title, started_at,
-           COALESCE(ended_at, ${now}) AS ended_at
+           COALESCE(ended_at, ${now}) AS ended_at,
+           COALESCE(is_background, 0) AS is_background
     FROM activity
     WHERE COALESCE(ended_at, ${now}) > ${dayStart}
       AND started_at < ${dayEnd}
+      AND COALESCE(is_background, 0) = 0
     GROUP BY id
     ORDER BY started_at ASC
   `);
@@ -1026,6 +1612,7 @@ ipcMain.handle('open-browser-extensions', (_, browser) => {
 
 // ── Screen lock / sleep / hibernate detection ─────────────────────────────────
 function onSystemIdle() {
+  writeAliveTimestamp(); // stamp the last known time before going idle/sleep
   // Screen locked, sleeping, or user walked away
   if (currentActivity) {
     endCurrentActivity();

@@ -1,16 +1,18 @@
 {
   "manifest_version": 3,
   "name": "DayLens Tracker",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Tracks websites you visit and sends data to your DayLens desktop app.",
   "permissions": [
     "tabs",
     "activeTab",
     "storage",
-    "alarms"
+    "alarms",
+    "windows"
   ],
   "host_permissions": [
-    "ws://127.0.0.1:43821/*"
+    "ws://127.0.0.1:43821/*",
+    "<all_urls>"
   ],
   "background": {
     "service_worker": "background.js"

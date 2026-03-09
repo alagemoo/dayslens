@@ -206,11 +206,25 @@ html,body{width:100%;height:100%;overflow:hidden;background:var(--bg);color:var(
 .daylog-activity-row{display:flex;align-items:flex-start;gap:9px;padding:6px 8px;border-radius:var(--r-xs);transition:background 0.12s}
 .daylog-activity-row:hover{background:var(--surface2)}
 .daylog-activity-row.expandable{cursor:pointer}
+
+/* ── Category Context Menu ───────────────────────────────────────────────── */
+#cat-menu{position:fixed;z-index:9999;background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:6px;min-width:200px;box-shadow:0 8px 32px rgba(0,0,0,0.5);display:none;user-select:none}
+#cat-menu.visible{display:block}
+.cat-menu-header{padding:7px 10px 6px;font-size:10px;font-weight:700;letter-spacing:0.1em;text-transform:uppercase;color:var(--muted2);border-bottom:1px solid var(--border);margin-bottom:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:220px}
+.cat-menu-item{display:flex;align-items:center;gap:8px;padding:7px 10px;border-radius:6px;cursor:pointer;transition:background 0.1s;font-size:12.5px;font-weight:500;color:var(--text)}
+.cat-menu-item:hover{background:var(--surface2)}
+.cat-menu-item.active{background:var(--surface2)}
+.cat-menu-item.active::after{content:'✓';margin-left:auto;font-size:11px;color:var(--muted2)}
+.cat-menu-dot{width:9px;height:9px;border-radius:3px;flex-shrink:0}
+.cat-menu-saved{padding:8px 10px;font-size:11px;color:var(--green);text-align:center;display:none}
+.cat-menu-saved.show{display:block}
 .daylog-act-dot{width:7px;height:7px;border-radius:50%;flex-shrink:0;margin-top:6px}
 .daylog-act-info{flex:1;min-width:0}
 .daylog-act-name{font-size:13px;font-weight:600;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .daylog-act-title{font-size:10.5px;color:var(--muted);margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:360px}
 .daylog-act-cat{font-size:10px;margin-top:2px;font-weight:600}
+.daylog-background-badge{display:inline-flex;align-items:center;gap:3px;font-size:9px;font-weight:700;padding:1px 6px;border-radius:8px;background:rgba(168,139,250,0.12);color:#a78bfa;border:1px solid rgba(168,139,250,0.25);margin-left:5px;vertical-align:middle;letter-spacing:0.3px}
+.daylog-activity-row.is-background{opacity:0.85;border-left:2px solid rgba(168,139,250,0.35);padding-left:10px}
 .daylog-act-dur{font-size:11.5px;color:var(--muted);white-space:nowrap;padding-top:4px;flex-shrink:0}
 .daylog-hour-total{padding:10px 16px;text-align:right;font-size:11.5px;color:var(--muted);white-space:nowrap;border-left:1px solid var(--border);vertical-align:top}
 .daylog-hour-total.has-time{color:var(--accent);font-weight:600}
@@ -236,6 +250,12 @@ html,body{width:100%;height:100%;overflow:hidden;background:var(--bg);color:var(
 </style>
 </head>
 <body>
+<!-- ── Category context menu ──────────────────────────────────────────────── -->
+<div id="cat-menu">
+  <div class="cat-menu-header" id="cat-menu-app-name">App Name</div>
+  <div id="cat-menu-items"></div>
+  <div class="cat-menu-saved" id="cat-menu-saved">✓ Saved — will remember this app</div>
+</div>
 <div class="app">
   <aside class="sidebar">
     <div class="logo">
@@ -420,12 +440,35 @@ function closeSettings(){document.getElementById('settings-overlay').classList.r
 
 // ─── Utils ───────────────────────────────────────────────────────────────────
 const CAT_COLORS={'Deep Work':'#4f8ef7','Learning':'#a78bfa','Communication':'#7c5cfc','Documents':'#34d399','Browsing':'#fb923c','Entertainment':'#f87171','Social Media':'#f472b6','System':'#94a3b8','Other':'#64748b','Uncategorized':'#64748b'};
+
+// Cache of user-saved category overrides fetched from main process DB.
+// Keyed by lowercase app_name. Refreshed on init and after every manual save.
+let _userCats = {};
+async function refreshUserCats() {
+  try { _userCats = await window.daylens.getUserCategories(); } catch(e) { _userCats = {}; }
+}
+// Escape HTML special chars — prevents any OS app name or window title
+// from injecting HTML into the UI (belt-and-suspenders safety measure)
+function esc(s){
+  if(!s) return '';
+  return String(s)
+    .replace(/&/g,'&amp;')
+    .replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;')
+    .replace(/"/g,'&quot;')
+    .replace(/'/g,'&#39;');
+}
 function msToHuman(ms){if(!ms||ms<0)return'0m';const h=Math.floor(ms/3600000),m=Math.floor((ms%3600000)/60000),s=Math.floor((ms%60000)/1000);if(h>0)return`${h}h ${m}m`;if(m>0)return`${m}m`;return`${s}s`;}
 function msToHoursDecimal(ms){return(ms/3600000).toFixed(1);}
 function appIcon(n){n=(n||'').toLowerCase();if(n.includes('chrome')||n.includes('browser'))return'🌐';if(n.includes('firefox'))return'🦊';if(n.includes('brave'))return'🦁';if(n.includes('edge'))return'🔷';if(n.includes('code')||n.includes('vscode')||n.includes('visual studio'))return'💻';if(n.includes('slack'))return'💬';if(n.includes('zoom'))return'📹';if(n.includes('discord'))return'🎮';if(n.includes('spotify'))return'🎵';if(n.includes('terminal')||n.includes('cmd')||n.includes('powershell'))return'⬛';if(n.includes('mail')||n.includes('outlook')||n.includes('gmail'))return'📧';if(n.includes('notion'))return'📝';if(n.includes('figma'))return'🎨';if(n.includes('youtube'))return'▶️';if(n.includes('explorer')||n.includes('finder'))return'📁';if(n.includes('claude')||n.includes('chatgpt'))return'🤖';return'📱';}
 const LEARN_KW=['tutorial','course','lecture','lesson','how to','how-to','learn','learning','bootcamp','masterclass','crash course','explained','guide','walkthrough','step by step','from scratch','for beginners','in depth','programming','coding','javascript','python','react','node','typescript','rust','golang','sql','machine learning','deep learning','neural network','data science','algorithms','system design','devops','docker','kubernetes','aws','cloud','cybersecurity','linux','bash','math','calculus','statistics','physics','chemistry','biology','history','economics','philosophy','psychology','finance','cs50','freecodecamp','udemy','coursera','khan academy','ted talk','ted-ed','3blue1brown','fireship','computerphile','neetcode','deep dive','complete guide','full course','full tutorial','documentary','science of','history of','what is','why does','how does','understanding'];
 const ENT_KW=['movie','film','trailer','official trailer','season','episode','ep.','full movie','music video','official video','lyrics','lyric video','vlog','day in my life','with me','storytime','prank','challenge','grwm','get ready with me','haul','unboxing','reaction','reacts to','watch party','i watched','first time watching','live stream','streaming now','gaming','gameplay',"let's play",'playthrough','speedrun','highlights','compilation','funny moments','fails','best of','meme','memes','shorts','tiktok compilation','joe rogan','hot ones','celebrity interview'];
 function guessCategory(app,title){
+  // 1. Always check user-saved DB overrides first
+  if(_userCats){
+    const saved = _userCats[(app||'').toLowerCase()];
+    if(saved) return saved.category;
+  }
   const n=(app||'').toLowerCase(),t=(title||'').toLowerCase();
   // Idle — never productive
   if(n==='idle'||n.includes('screen saver')||n.includes('lock screen'))return'System';
@@ -461,10 +504,17 @@ function guessCategory(app,title){
       'railway.app','render.com','jira','trello.com','asana.com','clickup.com',
       'dribbble.com','behance.net'].some(s=>n.includes(s)))return'Deep Work';
   // Docs
-  if(['docs.google.com','notion.so','obsidian.md'].some(s=>n.includes(s)))return'Documents';
+  if(n.includes('notebooklm.google.com'))return'Learning';
+  if(['docs.google.com','sheets.google.com','slides.google.com','drive.google.com',
+      'notion.so','obsidian.md','roamresearch.com','logseq.com'].some(s=>n.includes(s)))return'Documents';
   // Communication
+  // LinkedIn is Social Media, not Communication
+  if(n.includes('linkedin.com')){
+    if(t.includes('job')||t.includes('apply')||t.includes('article'))return'Deep Work';
+    return'Social Media';
+  }
   if(['gmail.com','mail.google.com','outlook.','office.com','slack.com',
-      'teams.microsoft','meet.google','zoom.us','linkedin.com']
+      'teams.microsoft','meet.google','zoom.us']
      .some(s=>n.includes(s)))return'Communication';
   if(['discord.com','telegram.org','whatsapp.com'].some(s=>n.includes(s)))return'Communication';
   // Entertainment & social
@@ -489,7 +539,10 @@ function guessCategory(app,title){
       'apple music','twitch'].some(k=>n.includes(k)))return'Entertainment';
   if(['twitter','reddit','facebook','instagram','tiktok','threads'].some(k=>n.includes(k)))return'Social Media';
   if(['explorer','finder','settings','control panel','task manager','activity monitor',
-      'spotlight','alfred','raycast','powershell','cmd','bash','zsh'].some(k=>n.includes(k)))return'System';
+      'spotlight','alfred','raycast','powershell','cmd','bash','zsh',
+      'snipping tool','snip','calculator','clock','calendar'].some(k=>n.includes(k)))return'System';
+  // Download managers — not productive
+  if(['internet download manager','idm','download manager','freedownload'].some(k=>n.includes(k)))return'Other';
   return'Other';
 }
 // Cap activity duration to its calendar day — prevents stale/unclosed rows from
@@ -502,7 +555,60 @@ function rowDur(r){
   const e=Math.min(r.ended_at||dayEnd,dayEnd);
   return Math.max(0,e-s);
 }
-function scoreGrade(s){if(s>=85)return{label:'Outstanding',color:'#2ec99a'};if(s>=70)return{label:'Excellent',color:'#2ec99a'};if(s>=55)return{label:'Good',color:'#4f8ef7'};if(s>=40)return{label:'Fair',color:'#fbbf24'};if(s>=25)return{label:'Light',color:'#f5854a'};return{label:'Minimal',color:'#f87171'};}
+// ── Weighted Focus Score ──────────────────────────────────────────────────────
+// Scores are NOT just productive/total. Each category has a weight:
+//   Deep Work   → 1.0  (full credit)
+//   Learning    → 1.0  (full credit)
+//   Documents   → 0.8  (mostly productive)
+//   Communication → 0.5 (necessary but not deep work)
+//   Browsing    → 0.3  (neutral/low value)
+//   System      → 0.0  (excluded — overhead)
+//   Other       → 0.2  (unknown, give small credit)
+//   Social Media → -0.3 (actively penalized)
+//   Entertainment → -0.2 (penalized)
+//   Idle        → 0.0  (excluded entirely)
+const CAT_WEIGHTS = {
+  'Deep Work':     1.0,
+  'Learning':      1.0,
+  'Documents':     0.8,
+  'Communication': 0.5,
+  'Browsing':      0.3,
+  'Other':         0.2,
+  'System':        0.0,
+  'Entertainment': -0.2,
+  'Social Media':  -0.3,
+};
+
+function computeFocusScore(rows) {
+  // Only count non-idle, non-system time in the base
+  const counted = rows.filter(r => {
+    const cat = r.category || guessCategory(r.app_name, r.window_title);
+    return cat !== 'System' && (r.app_name||'').toLowerCase() !== 'idle';
+  });
+  const base = counted.reduce((s, r) => s + r.total_ms, 0);
+  if (base === 0) return 0;
+
+  // Weighted sum
+  let weighted = 0;
+  for (const r of counted) {
+    const cat = r.category || guessCategory(r.app_name, r.window_title);
+    const w = CAT_WEIGHTS[cat] ?? 0.2;
+    weighted += r.total_ms * w;
+  }
+
+  // Score = weighted / base, scaled 0–100, floor at 0
+  const raw = (weighted / base) * 100;
+  return Math.max(0, Math.min(100, Math.round(raw)));
+}
+
+function scoreGrade(s){
+  if(s>=88)return{label:'Outstanding',color:'#2ec99a'};
+  if(s>=75)return{label:'Excellent',color:'#2ec99a'};
+  if(s>=60)return{label:'Good',color:'#4f8ef7'};
+  if(s>=45)return{label:'Fair',color:'#fbbf24'};
+  if(s>=25)return{label:'Light',color:'#f5854a'};
+  return{label:'Minimal',color:'#f87171'};
+}
 
 // ─── Navigation ──────────────────────────────────────────────────────────────
 const PAGE_TITLES={today:'Today',weekly:'Weekly Report',apps:'All Apps',daylog:'Day Log'};
@@ -512,22 +618,60 @@ function loadPage(id){if(id==='daylog')loadDayLog();else if(id==='today')loadTod
 function updateDateChip(){document.getElementById('date-chip').textContent=new Date().toLocaleDateString('en-US',{weekday:'long',month:'long',day:'numeric'});}
 
 // ─── Current Activity ─────────────────────────────────────────────────────────
-async function updateCurrentActivity(){const wrap=document.getElementById('current-activity-wrap');const a=await window.daylens.getCurrentActivity();if(!a){wrap.innerHTML='';return;}const e=Date.now()-a.startedAt;wrap.innerHTML=`<div class="current-app-wrap"><div class="current-dot"></div><div class="current-info"><div class="current-label">Now tracking</div><div class="current-name">${appIcon(a.appName)} ${a.appName}</div>${a.windowTitle?`<div class="current-title">${a.windowTitle}</div>`:''}</div><div class="current-timer">${msToHuman(e)}</div></div>`;}
+let _liveTimerInterval = null;
+let _currentTrackedApp = null;
+let _currentTrackedStart = null;
+
+async function updateCurrentActivity(){
+  const wrap=document.getElementById('current-activity-wrap');
+  const a=await window.daylens.getCurrentActivity();
+  if(!a){
+    wrap.innerHTML='';
+    _currentTrackedApp=null;
+    _currentTrackedStart=null;
+    if(_liveTimerInterval){clearInterval(_liveTimerInterval);_liveTimerInterval=null;}
+    return;
+  }
+  // If same app as before, just update the timer element — don't rebuild DOM
+  if(_currentTrackedApp===a.appName && _currentTrackedStart===a.startedAt){
+    const timerEl=document.getElementById('live-timer');
+    if(timerEl) timerEl.textContent=msToHuman(Date.now()-a.startedAt);
+    return;
+  }
+  // New app — rebuild and start live ticker
+  _currentTrackedApp=a.appName;
+  _currentTrackedStart=a.startedAt;
+  wrap.innerHTML=`<div class="current-app-wrap"><div class="current-dot"></div><div class="current-info"><div class="current-label">Now tracking</div><div class="current-name">${appIcon(a.appName)} ${esc(a.appName)}</div>${a.windowTitle?`<div class="current-title">${a.windowTitle.substring(0,60)}</div>`:''}</div><div class="current-timer" id="live-timer">${msToHuman(Date.now()-a.startedAt)}</div></div>`;
+  if(_liveTimerInterval) clearInterval(_liveTimerInterval);
+  _liveTimerInterval=setInterval(()=>{
+    const el=document.getElementById('live-timer');
+    if(el) el.textContent=msToHuman(Date.now()-a.startedAt);
+  },1000);
+}
 
 // ─── TODAY ────────────────────────────────────────────────────────────────────
-async function loadToday(){await updateCurrentActivity();const rows=await window.daylens.getSummary(1);const totalMs=rows.reduce((s,r)=>s+r.total_ms,0),productiveMs=rows.filter(r=>r.productive).reduce((s,r)=>s+r.total_ms,0),score=totalMs>0?Math.round(productiveMs/totalMs*100):0,grade=scoreGrade(score);
+async function loadToday(){await updateCurrentActivity();const rows=await window.daylens.getSummary(1);
+const totalMs=rows.reduce((s,r)=>s+r.total_ms,0);
+const productiveMs=rows.filter(r=>r.productive).reduce((s,r)=>s+r.total_ms,0);
+const score=computeFocusScore(rows);
+const grade=scoreGrade(score);
 document.getElementById('stats-grid').innerHTML=`<div class="stat-card"><div class="stat-label">Total Tracked</div><div class="stat-value">${msToHuman(totalMs)}</div><div class="stat-sub">${msToHoursDecimal(totalMs)} hours today</div><div class="stat-accent">⏱</div></div><div class="stat-card"><div class="stat-label">Productive Time</div><div class="stat-value">${msToHuman(productiveMs)}</div><div class="stat-sub">${totalMs>0?Math.round(productiveMs/totalMs*100):0}% of tracked time</div><div class="stat-accent">🎯</div></div><div class="stat-card"><div class="stat-label">Focus Score</div><div class="stat-value" style="color:${grade.color}">${score}</div><div class="stat-sub">${grade.label}</div><div class="stat-accent">⚡</div></div><div class="stat-card"><div class="stat-label">Apps Used</div><div class="stat-value">${rows.length}</div><div class="stat-sub">unique applications</div><div class="stat-accent">⊞</div></div>`;
 if(!rows.length){document.getElementById('donut-wrap').innerHTML='<div class="empty"><div class="empty-icon">◔</div><div class="empty-text">No activity yet — keep this open!</div></div>';document.getElementById('top-apps').innerHTML='<div class="empty"><div class="empty-icon">📭</div><div class="empty-text">Apps will appear shortly.</div></div>';document.getElementById('timeline-wrap').innerHTML='<div class="empty"><div class="empty-icon">📅</div><div class="empty-text">Timeline will populate as you work</div></div>';return;}
 const catMap={};for(const r of rows){const c=r.category||guessCategory(r.app_name);catMap[c]=(catMap[c]||0)+r.total_ms;}renderDonut(catMap,totalMs);renderTopApps(rows.slice(0,8),totalMs,'top-apps');await renderTimeline();}
 
 function renderDonut(catMap,totalMs){const entries=Object.entries(catMap).sort((a,b)=>b[1]-a[1]);const R=64,cx=72,cy=72,stroke=20,circ=2*Math.PI*R;let offset=0,segs='';for(const[cat,ms]of entries){const len=ms/totalMs*circ,color=CAT_COLORS[cat]||'#64748b';segs+=`<circle cx="${cx}" cy="${cy}" r="${R}" fill="none" stroke="${color}" stroke-width="${stroke}" stroke-dasharray="${len} ${circ-len}" stroke-dashoffset="${-offset}"/>`;offset+=len;}const legend=entries.map(([cat,ms])=>`<div class="legend-item"><div class="legend-dot" style="background:${CAT_COLORS[cat]||'#64748b'}"></div><div class="legend-name">${cat}</div><div class="legend-time">${msToHuman(ms)}</div><div class="legend-pct">${Math.round(ms/totalMs*100)}%</div></div>`).join('');document.getElementById('category-total').textContent=msToHuman(totalMs);document.getElementById('donut-wrap').innerHTML=`<div class="donut-svg-wrap"><svg width="144" height="144" viewBox="0 0 144 144"><circle cx="72" cy="72" r="64" fill="none" stroke="var(--border)" stroke-width="20"/><g transform="rotate(-90 72 72)">${segs}</g></svg><div class="donut-center"><div class="donut-center-val">${Math.round(totalMs/3600000*10)/10}h</div><div class="donut-center-lbl">total</div></div></div><div class="legend">${legend}</div>`;}
 
-function renderTopApps(rows,totalMs,id){if(!rows.length){document.getElementById(id).innerHTML='<div class="empty"><div class="empty-icon">📭</div><div class="empty-text">No apps tracked yet</div></div>';return;}document.getElementById(id).innerHTML=rows.map(r=>{const cat=r.category||guessCategory(r.app_name,r.window_title),color=CAT_COLORS[cat]||'#64748b',pct=Math.round(r.total_ms/totalMs*100),sub=r.window_title&&r.window_title!==r.app_name?r.window_title.replace(/ [-–|] .*(YouTube|Reddit|Brave|Chrome|Google).*$/i,'').substring(0,55):null;return`<div class="app-row"><div class="app-icon">${appIcon(r.app_name)}</div><div class="app-info"><div class="app-name">${r.app_name}</div>${sub?`<div class="app-title-hint">${sub}</div>`:''}<div class="app-cat" style="color:${color}">${cat}</div></div><div class="app-bar-wrap"><div class="app-bar-bg"><div class="app-bar-fill" style="width:${pct}%;background:${color}"></div></div></div><div class="app-time">${msToHuman(r.total_ms)}</div></div>`;}).join('');}
+function renderTopApps(rows,totalMs,id){if(!rows.length){document.getElementById(id).innerHTML='<div class="empty"><div class="empty-icon">📭</div><div class="empty-text">No apps tracked yet</div></div>';return;}document.getElementById(id).innerHTML=rows.map(r=>{const cat=r.category||guessCategory(r.app_name,r.window_title),color=CAT_COLORS[cat]||'#64748b',pct=Math.round(r.total_ms/totalMs*100),sub=r.window_title&&r.window_title!==r.app_name?r.window_title.replace(/ [-–|] .*(YouTube|Reddit|Brave|Chrome|Google).*$/i,'').substring(0,55):null;return`<div class="app-row" oncontextmenu="openCatMenu(event,'${esc(r.app_name).replace(/'/g,"\\'")}','${cat}')"><div class="app-icon">${appIcon(r.app_name)}</div><div class="app-info"><div class="app-name">${esc(r.app_name)}</div>${sub?`<div class="app-title-hint">${esc(sub)}</div>`:''}<div class="app-cat" style="color:${color}">${cat}</div></div><div class="app-bar-wrap"><div class="app-bar-bg"><div class="app-bar-fill" style="width:${pct}%;background:${color}"></div></div></div><div class="app-time">${msToHuman(r.total_ms)}</div></div>`;}).join('');}
 
-async function renderTimeline(){const wrap=document.getElementById('timeline-wrap');const rows=await window.daylens.getToday();if(!rows.length){wrap.innerHTML='<div class="empty"><div class="empty-icon">📅</div><div class="empty-text">No timeline data</div></div>';return;}const s0=new Date();s0.setHours(0,0,0,0);const dS=s0.getTime(),now=Date.now(),dSpan=now-dS;const slots=rows.map(r=>{const s=Math.max(r.started_at,dS),e=r.ended_at?Math.min(r.ended_at,now):now,dur=e-s,w=(dur/dSpan)*100,cat=guessCategory(r.app_name),color=CAT_COLORS[cat]||'#64748b';if(w<0.1)return'';return`<div class="tl-slot" style="width:${Math.max(w,0.3)}%;background:${color};opacity:0.85" title="${r.app_name} — ${msToHuman(dur)}"></div>`;}).join('');const hrs=[];for(let h=0;h<=23;h+=3)hrs.push(h===0?'12am':h<12?`${h}am`:h===12?'12pm':`${h-12}pm`);document.getElementById('timeline-range').textContent=`${new Date(rows[0]?.started_at).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})} → Now`;wrap.innerHTML=`<div class="timeline" style="display:flex;gap:1px;height:32px;width:100%">${slots}</div><div class="tl-labels">${hrs.map(h=>`<span>${h}</span>`).join('')}</div>`;}
+async function renderTimeline(){const wrap=document.getElementById('timeline-wrap');const rows=await window.daylens.getToday();if(!rows.length){wrap.innerHTML='<div class="empty"><div class="empty-icon">📅</div><div class="empty-text">No timeline data</div></div>';return;}const s0=new Date();s0.setHours(0,0,0,0);const dS=s0.getTime(),now=Date.now(),dSpan=now-dS;const slots=rows.map(r=>{const s=Math.max(r.started_at,dS),e=r.ended_at?Math.min(r.ended_at,now):now,dur=e-s,w=(dur/dSpan)*100,cat=guessCategory(r.app_name),color=CAT_COLORS[cat]||'#64748b';if(w<0.1)return'';const isBg=r.is_background;return`<div class="tl-slot" style="width:${Math.max(w,0.3)}%;background:${color};opacity:${isBg?'0.35':'0.85'};border-top:${isBg?'2px solid #a78bfa':'none'}" title="${esc(r.app_name)}${isBg?' (background audio)':''} — ${msToHuman(dur)}"></div>`;}).join('');const hrs=[];for(let h=0;h<=23;h+=3)hrs.push(h===0?'12am':h<12?`${h}am`:h===12?'12pm':`${h-12}pm`);document.getElementById('timeline-range').textContent=`${new Date(rows[0]?.started_at).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})} → Now`;wrap.innerHTML=`<div class="timeline" style="display:flex;gap:1px;height:32px;width:100%">${slots}</div><div class="tl-labels">${hrs.map(h=>`<span>${h}</span>`).join('')}</div>`;}
 
 // ─── WEEKLY ───────────────────────────────────────────────────────────────────
-async function loadWeekly(){const days=await window.daylens.getWeekly();const t7=days.reduce((s,d)=>s+d.totalMs,0),p7=days.reduce((s,d)=>s+d.productiveMs,0),sc7=t7>0?Math.round(p7/t7*100):0,g=scoreGrade(sc7);document.getElementById('weekly-stats').innerHTML=`<div class="stat-card"><div class="stat-label">Week Total</div><div class="stat-value">${msToHuman(t7)}</div><div class="stat-sub">across 7 days</div><div class="stat-accent">📅</div></div><div class="stat-card"><div class="stat-label">Productive</div><div class="stat-value">${msToHuman(p7)}</div><div class="stat-sub">${sc7}% of total</div><div class="stat-accent">🎯</div></div><div class="stat-card"><div class="stat-label">Daily Average</div><div class="stat-value">${msToHuman(t7/7)}</div><div class="stat-sub">per day</div><div class="stat-accent">⏱</div></div><div class="stat-card"><div class="stat-label">Best Day</div><div class="stat-value" style="font-size:17px">${[...days].sort((a,b)=>b.productiveMs-a.productiveMs)[0]?.date?.split(',')[0]||'—'}</div><div class="stat-sub">most productive</div><div class="stat-accent">🏆</div></div>`;const mxMs=Math.max(...days.map(d=>d.totalMs),1);document.getElementById('weekly-chart-wrap').innerHTML=`<div class="weekly-chart">${days.map((d,i)=>`<div class="week-col ${i===6?'week-today':''}"><div class="week-bars" title="${d.date}: ${msToHuman(d.totalMs)}"><div class="week-bar other" style="height:${d.totalMs/mxMs*100}%"></div><div class="week-bar productive" style="height:${d.productiveMs/mxMs*100}%"></div></div><div class="week-label">${d.date.split(',')[0].split(' ')[0]}</div></div>`).join('')}</div>`;const r2=52,c2=2*Math.PI*r2,f=(sc7/100)*c2;document.getElementById('score-wrap').innerHTML=`<div><svg width="120" height="120" class="score-ring-svg"><circle cx="60" cy="60" r="${r2}" fill="none" stroke="var(--border)" stroke-width="10"/><circle cx="60" cy="60" r="${r2}" fill="none" stroke="${g.color}" stroke-width="10" stroke-dasharray="${f} ${c2-f}" stroke-linecap="round"/></svg></div><div><div class="score-val" style="color:${g.color}">${sc7}</div><div class="score-lbl">SCORE</div><div class="score-grade" style="color:${g.color}">${g.label}</div></div>`;const s7=await window.daylens.getSummary(7);renderTopApps(s7.slice(0,10),s7.reduce((s,r)=>s+r.total_ms,0),'weekly-top-apps');}
+async function loadWeekly(){const days=await window.daylens.getWeekly();
+const t7=days.reduce((s,d)=>s+d.totalMs,0),p7=days.reduce((s,d)=>s+d.productiveMs,0);
+// Weekly score uses weighted category breakdown from all 7 days
+const allWeekRows=days.flatMap(d=>d.apps||[]);
+const sc7=allWeekRows.length>0?computeFocusScore(allWeekRows):t7>0?Math.round(p7/t7*100):0;
+const g=scoreGrade(sc7);document.getElementById('weekly-stats').innerHTML=`<div class="stat-card"><div class="stat-label">Week Total</div><div class="stat-value">${msToHuman(t7)}</div><div class="stat-sub">across 7 days</div><div class="stat-accent">📅</div></div><div class="stat-card"><div class="stat-label">Productive</div><div class="stat-value">${msToHuman(p7)}</div><div class="stat-sub">${sc7}% of total</div><div class="stat-accent">🎯</div></div><div class="stat-card"><div class="stat-label">Daily Average</div><div class="stat-value">${msToHuman(t7/7)}</div><div class="stat-sub">per day</div><div class="stat-accent">⏱</div></div><div class="stat-card"><div class="stat-label">Best Day</div><div class="stat-value" style="font-size:17px">${[...days].sort((a,b)=>b.productiveMs-a.productiveMs)[0]?.date?.split(',')[0]||'—'}</div><div class="stat-sub">most productive</div><div class="stat-accent">🏆</div></div>`;const mxMs=Math.max(...days.map(d=>d.totalMs),1);document.getElementById('weekly-chart-wrap').innerHTML=`<div class="weekly-chart">${days.map((d,i)=>`<div class="week-col ${i===6?'week-today':''}"><div class="week-bars" title="${d.date}: ${msToHuman(d.totalMs)}"><div class="week-bar other" style="height:${d.totalMs/mxMs*100}%"></div><div class="week-bar productive" style="height:${d.productiveMs/mxMs*100}%"></div></div><div class="week-label">${d.date.split(',')[0].split(' ')[0]}</div></div>`).join('')}</div>`;const r2=52,c2=2*Math.PI*r2,f=(sc7/100)*c2;document.getElementById('score-wrap').innerHTML=`<div><svg width="120" height="120" class="score-ring-svg"><circle cx="60" cy="60" r="${r2}" fill="none" stroke="var(--border)" stroke-width="10"/><circle cx="60" cy="60" r="${r2}" fill="none" stroke="${g.color}" stroke-width="10" stroke-dasharray="${f} ${c2-f}" stroke-linecap="round"/></svg></div><div><div class="score-val" style="color:${g.color}">${sc7}</div><div class="score-lbl">SCORE</div><div class="score-grade" style="color:${g.color}">${g.label}</div></div>`;const s7=await window.daylens.getSummary(7);renderTopApps(s7.slice(0,10),s7.reduce((s,r)=>s+r.total_ms,0),'weekly-top-apps');}
 
 // ─── ALL APPS ─────────────────────────────────────────────────────────────────
 async function loadAllApps(){const rows=await window.daylens.getSummary(1);document.getElementById('apps-count').textContent=`${rows.length} apps`;renderTopApps(rows,rows.reduce((s,r)=>s+r.total_ms,0),'all-apps-list');}
@@ -549,14 +693,15 @@ const totalMs=rows.reduce((s,r)=>s+(rowDur(r)),0);const productiveMs=rows.filter
 let tableRows='';
 for(let h=lastH;h>=firstH;h--){const hourRows=buckets[h]||[],hourMs=hourRows.reduce((s,r)=>s+(rowDur(r)),0),hasA=hourRows.length>0;let aHtml='';
 if(hasA){const groups={};for(const r of hourRows){if(!groups[r.app_name])groups[r.app_name]={app_name:r.app_name,visits:[],totalMs:0};groups[r.app_name].visits.push(r);groups[r.app_name].totalMs+=rowDur(r);}
-aHtml=Object.values(groups).sort((a,b)=>b.totalMs-a.totalMs).map((g,gi)=>{const cat=guessCategory(g.app_name,g.visits[0]?.window_title),color=CAT_COLORS[cat]||'#64748b',uid=`grp-${h}-${gi}`,multi=g.visits.length>1;const titles=[...new Set(g.visits.map(r=>(r.window_title&&r.window_title!==r.app_name)?r.window_title.replace(/ [-–|].*?(YouTube|Brave|Chrome|Google|Reddit|LinkedIn).*$/i,'').trim().substring(0,60):null).filter(Boolean))];const st=titles.length===1?titles[0]:titles.length>1?`${titles[0]} +${titles.length-1} more`:null;const drs=multi?g.visits.map(r=>{const t2=new Date(r.started_at).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}),d2=msToHuman(rowDur(r)),pg=(r.window_title&&r.window_title!==r.app_name)?r.window_title.replace(/ [-–|].*?(YouTube|Brave|Chrome|Google|Reddit|LinkedIn).*$/i,'').trim().substring(0,55):'—';return`<div class="daylog-detail-row"><span class="daylog-detail-time">${t2}</span><span class="daylog-detail-page">${pg}</span><span class="daylog-detail-dur">${d2}</span></div>`;}).join(''):'';return`<div class="daylog-activity-row ${multi?'expandable':''}" ${multi?`onclick="toggleGroup('${uid}')"`:''}><div class="daylog-act-dot" style="background:${color}"></div><div class="daylog-act-info"><div class="daylog-act-name">${appIcon(g.app_name)} ${g.app_name}${multi?`<span class="daylog-visit-badge">${g.visits.length}×</span>`:''}</div>${st?`<div class="daylog-act-title">${st}</div>`:''}<div class="daylog-act-cat" style="color:${color}">${cat}</div></div><div style="display:flex;align-items:center;gap:6px">${multi?`<span class="daylog-expand-icon" id="icon-${uid}">›</span>`:''}<div class="daylog-act-dur">${msToHuman(g.totalMs)}</div></div></div>${multi?`<div class="daylog-detail-list" id="${uid}" style="display:none">${drs}</div>`:''}`;}).join('');}else aHtml='<div class="daylog-empty-hour">— idle —</div>';
+aHtml=Object.values(groups).sort((a,b)=>b.totalMs-a.totalMs).map((g,gi)=>{const cat=guessCategory(g.app_name,g.visits[0]?.window_title),color=CAT_COLORS[cat]||'#64748b',uid=`grp-${h}-${gi}`,multi=g.visits.length>1;const titles=[...new Set(g.visits.map(r=>(r.window_title&&r.window_title!==r.app_name)?r.window_title.replace(/ [-–|].*?(YouTube|Brave|Chrome|Google|Reddit|LinkedIn).*$/i,'').trim().substring(0,60):null).filter(Boolean))];const st=titles.length===1?titles[0]:titles.length>1?`${titles[0]} +${titles.length-1} more`:null;const drs=multi?g.visits.map(r=>{const t2=new Date(r.started_at).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}),d2=msToHuman(rowDur(r)),pg=(r.window_title&&r.window_title!==r.app_name)?r.window_title.replace(/ [-–|].*?(YouTube|Brave|Chrome|Google|Reddit|LinkedIn).*$/i,'').trim().substring(0,55):'—';return`<div class="daylog-detail-row"><span class="daylog-detail-time">${t2}</span><span class="daylog-detail-page">${pg}</span><span class="daylog-detail-dur">${d2}</span></div>`;}).join(''):'';const isBg=g.visits[0]?.is_background;const bgBadge=isBg?'<span class="daylog-background-badge">◉ BACKGROUND AUDIO</span>':'';
+return`<div class="daylog-activity-row ${multi?'expandable':''} ${isBg?'is-background':''}" ${multi?`onclick="toggleGroup('${uid}')"`:''}  oncontextmenu="openCatMenu(event,'${esc(g.app_name).replace(/'/g,"\\'")}','${cat}')"><div class="daylog-act-dot" style="background:${color}${isBg?';opacity:0.6':''}"></div><div class="daylog-act-info"><div class="daylog-act-name">${appIcon(g.app_name)} ${esc(g.app_name)}${multi?`<span class="daylog-visit-badge">${g.visits.length}×</span>`:''}${bgBadge}</div>${st?`<div class="daylog-act-title">${st}</div>`:''}<div class="daylog-act-cat" style="color:${color}">${cat}</div></div><div style="display:flex;align-items:center;gap:6px">${multi?`<span class="daylog-expand-icon" id="icon-${uid}">›</span>`:''}<div class="daylog-act-dur">${isBg?'~':''} ${msToHuman(g.totalMs)}</div></div></div>${multi?`<div class="daylog-detail-list" id="${uid}" style="display:none">${drs}</div>`:''}`;}).join('');}else aHtml='<div class="daylog-empty-hour">— idle —</div>';
 tableRows+=`<tr class="daylog-hour-row"><td><div class="daylog-hour-cell ${hasA?'has-activity':''}">${formatHour(h)}<br><span style="color:var(--muted2);font-weight:400">→ ${formatHour(h+1)}</span></div></td><td class="daylog-activities-cell">${aHtml}</td><td><div class="daylog-hour-total ${hourMs>0?'has-time':''}">${hourMs>0?msToHuman(hourMs):'—'}</div></td></tr>`;}
 const sc=totalMs>0?Math.round(productiveMs/totalMs*100):0,gd=scoreGrade(sc);
 wrap.innerHTML=`<table class="daylog-table"><thead><tr><th>Time</th><th>Activities</th><th style="text-align:right">Duration</th></tr></thead><tbody>${tableRows}<tr class="daylog-summary-row"><td colspan="3"><div class="daylog-summary-inner"><div class="daylog-summary-stat"><div class="daylog-summary-val">${msToHuman(totalMs)}</div><div class="daylog-summary-lbl">Total Tracked</div></div><div class="daylog-summary-stat"><div class="daylog-summary-val" style="color:var(--green)">${msToHuman(productiveMs)}</div><div class="daylog-summary-lbl">Productive</div></div><div class="daylog-summary-stat"><div class="daylog-summary-val" style="color:${gd.color}">${sc}</div><div class="daylog-summary-lbl">Focus Score</div></div><div class="daylog-summary-stat"><div class="daylog-summary-val">${appSet.size}</div><div class="daylog-summary-lbl">Apps Used</div></div><div class="daylog-summary-stat"><div class="daylog-summary-val" style="color:${gd.color};font-size:13px">${gd.label}</div><div class="daylog-summary-lbl">Verdict</div></div></div></td></tr></tbody></table>`;}
 
 async function fetchDayRows(o){if(o===0)return await window.daylens.getToday();try{return await window.daylens.getDayRows(o);}catch(e){return[];}}
 function formatHour(h){if(h>=24)h=23;return`${h===0?12:h>12?h-12:h}:00 ${h<12?'AM':'PM'}`;}
-async function exportDayLog(){const rows=await fetchDayRows(daylogOffset);if(!rows.length)return;const target=daylogDateTarget(daylogOffset);let csv=`Day Log — ${target.toLocaleDateString()}\nTime,App,Title,Category,Duration\n`;for(const r of rows){const t2=new Date(r.started_at).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}),cat=guessCategory(r.app_name,r.window_title);csv+=`${t2},"${r.app_name}","${(r.window_title||'').replace(/,/g,';')}",${cat},${msToHuman(rowDur(r))}\n`;}const blob=new Blob([csv],{type:'text/csv'}),url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download=`daylens-${target.toISOString().slice(0,10)}.csv`;a.click();URL.revokeObjectURL(url);}
+async function exportDayLog(){const rows=await fetchDayRows(daylogOffset);if(!rows.length)return;const target=daylogDateTarget(daylogOffset);let csv=`Day Log — ${target.toLocaleDateString()}\nTime,App,Title,Category,Duration\n`;for(const r of rows){const t2=new Date(r.started_at).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}),cat=guessCategory(r.app_name,r.window_title);csv+=`${t2},"${esc(r.app_name)}","${(r.window_title||'').replace(/,/g,';')}",${cat},${msToHuman(rowDur(r))}\n`;}const blob=new Blob([csv],{type:'text/csv'}),url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download=`daylens-${target.toISOString().slice(0,10)}.csv`;a.click();URL.revokeObjectURL(url);}
 function toggleGroup(uid){const el=document.getElementById(uid),ic=document.getElementById('icon-'+uid);if(!el)return;const op=el.style.display==='none';el.style.display=op?'block':'none';if(ic)ic.classList.toggle('open',op);}
 
 // ─── Extension ────────────────────────────────────────────────────────────────
@@ -582,7 +727,7 @@ return insights.slice(0,4);}
 async function exportCurrentPdf(){const btn=document.getElementById('export-pdf-btn'),page=document.querySelector('.page.active')?.id?.replace('page-','')||'today';btn.disabled=true;btn.textContent='⏳ Generating…';try{let html,filename;if(page==='today'||page==='apps')({html,filename}=await buildDayPdf(0));else if(page==='weekly')({html,filename}=await buildWeeklyPdf());else if(page==='daylog')({html,filename}=await buildDayPdf(daylogOffset));if(html){const result=await window.daylens.exportPdf({html,filename});if(result.success){btn.textContent='✓ Saved!';setTimeout(()=>{btn.disabled=false;btn.innerHTML='⬇ Export PDF';},2500);return;}}}catch(e){console.error('PDF error',e);}btn.disabled=false;btn.innerHTML='⬇ Export PDF';}
 
 async function buildDayPdf(offset){const rows=await fetchDayRows(offset);const target=daylogDateTarget(offset);const dateStr=target.toLocaleDateString('en-US',{weekday:'long',month:'long',day:'numeric',year:'numeric'});const filename=`DayLens-${target.toISOString().slice(0,10)}.pdf`;if(!rows.length)return{html:'<p>No data</p>',filename};
-const totalMs=rows.reduce((s,r)=>s+(rowDur(r)),0);const productiveMs=rows.filter(r=>!['Entertainment','Social Media','System','Other'].includes(guessCategory(r.app_name,r.window_title))).reduce((s,r)=>s+(rowDur(r)),0);const score=totalMs>0?Math.round(productiveMs/totalMs*100):0;const scoreColor=score>=80?'#29c99a':score>=60?'#5b9cf6':score>=40?'#f5854a':'#f06e6e';const grade=scoreGrade(score);
+const totalMs=rows.reduce((s,r)=>s+(rowDur(r)),0);const productiveMs=rows.filter(r=>!['Entertainment','Social Media','System','Other'].includes(guessCategory(r.app_name,r.window_title))).reduce((s,r)=>s+(rowDur(r)),0);const score=computeFocusScore(rows.map(r=>({...r,total_ms:rowDur(r)})));const scoreColor=score>=80?'#29c99a':score>=60?'#5b9cf6':score>=40?'#f5854a':'#f06e6e';const grade=scoreGrade(score);
 const catTotals={};for(const r of rows){const c=guessCategory(r.app_name,r.window_title);catTotals[c]=(catTotals[c]||0)+(rowDur(r));}const catEntries=Object.entries(catTotals).sort((a,b)=>b[1]-a[1]);
 const appTotals={};for(const r of rows){if(!appTotals[r.app_name])appTotals[r.app_name]={ms:0,cat:guessCategory(r.app_name,r.window_title)};appTotals[r.app_name].ms+=rowDur(r);}const topApps=Object.entries(appTotals).sort((a,b)=>b[1].ms-a[1].ms).slice(0,8);
 const hourTotals={};for(const r of rows){const h=new Date(r.started_at).getHours();hourTotals[h]=(hourTotals[h]||0)+(rowDur(r));}let firstH=23,lastH=0;for(const h of Object.keys(hourTotals)){const n=parseInt(h);if(n<firstH)firstH=n;if(n>lastH)lastH=n;}
@@ -619,7 +764,7 @@ async function softRefreshToday(){
     await updateCurrentActivity();
     const rows=await window.daylens.getSummary(1);
     if(!rows.length)return;
-    const totalMs=rows.reduce((s,r)=>s+r.total_ms,0),productiveMs=rows.filter(r=>r.productive).reduce((s,r)=>s+r.total_ms,0),score=totalMs>0?Math.round(productiveMs/totalMs*100):0,grade=scoreGrade(score);
+    const totalMs=rows.reduce((s,r)=>s+r.total_ms,0),productiveMs=rows.filter(r=>r.productive).reduce((s,r)=>s+r.total_ms,0),score=computeFocusScore(rows),grade=scoreGrade(score);
     // Update stat cards in-place (no innerHTML replacement of outer grid)
     const grid=document.getElementById('stats-grid');
     if(grid&&grid.children.length===4){
@@ -645,11 +790,106 @@ async function softRefreshToday(){
   }catch(e){}
 }
 
+// ─── Category Context Menu ────────────────────────────────────────────────────
+const ALL_CATEGORIES = [
+  'Deep Work','Learning','Communication','Documents',
+  'Browsing','Entertainment','Social Media','System','Other'
+];
+const CAT_PRODUCTIVE = {
+  'Deep Work':1,'Learning':1,'Communication':1,'Documents':1,
+  'Browsing':0,'Entertainment':0,'Social Media':0,'System':0,'Other':0
+};
+
+let _catMenuTarget = null; // { appName, currentCat }
+
+function openCatMenu(e, appName, currentCat) {
+  e.preventDefault();
+  e.stopPropagation();
+  if (!appName || appName === 'Unknown') return;
+
+  _catMenuTarget = { appName, currentCat };
+
+  const menu = document.getElementById('cat-menu');
+  const header = document.getElementById('cat-menu-app-name');
+  const items = document.getElementById('cat-menu-items');
+  const saved = document.getElementById('cat-menu-saved');
+
+  saved.classList.remove('show');
+  header.textContent = appName.length > 28 ? appName.substring(0, 26) + '…' : appName;
+
+  items.innerHTML = ALL_CATEGORIES.map(cat => {
+    const color = CAT_COLORS[cat] || '#64748b';
+    const isActive = cat === currentCat;
+    return `<div class="cat-menu-item ${isActive ? 'active' : ''}" onclick="selectCategory('${esc(cat)}')">
+      <div class="cat-menu-dot" style="background:${color}"></div>
+      <span>${cat}</span>
+      ${isActive ? '<span style="margin-left:auto;font-size:11px;opacity:0.5">✓</span>' : ''}
+    </div>`;
+  }).join('');
+
+  // Position: keep menu within window bounds
+  const menuW = 220, menuH = 360;
+  let x = e.clientX, y = e.clientY;
+  if (x + menuW > window.innerWidth - 10)  x = window.innerWidth - menuW - 10;
+  if (y + menuH > window.innerHeight - 10) y = window.innerHeight - menuH - 10;
+
+  menu.style.left = x + 'px';
+  menu.style.top  = y + 'px';
+  menu.classList.add('visible');
+}
+
+async function selectCategory(category) {
+  if (!_catMenuTarget) return;
+  const { appName } = _catMenuTarget;
+  const productive = CAT_PRODUCTIVE[category] ?? 0;
+
+  // Save to DB with user_override=1 — will never be overwritten by auto-classify
+  await window.daylens.setCategory(appName, category, productive);
+
+  // Show confirmation in menu
+  const saved = document.getElementById('cat-menu-saved');
+  const items = document.getElementById('cat-menu-items');
+  items.innerHTML = ALL_CATEGORIES.map(cat => {
+    const color = CAT_COLORS[cat] || '#64748b';
+    const isActive = cat === category;
+    return `<div class="cat-menu-item ${isActive ? 'active' : ''}">
+      <div class="cat-menu-dot" style="background:${color}"></div>
+      <span>${cat}</span>
+      ${isActive ? '<span style="margin-left:auto;font-size:11px;opacity:0.5">✓</span>' : ''}
+    </div>`;
+  }).join('');
+  saved.classList.add('show');
+
+  // Close menu after short delay, then refresh current view
+  setTimeout(async () => {
+    closeCatMenu();
+    await refreshUserCats(); // re-sync cache so guessCategory uses new value immediately
+    // Refresh whichever page is active so the new category shows immediately
+    const page = document.querySelector('.nav-item.active')?.dataset?.page;
+    if (page === 'today')       await loadToday();
+    else if (page === 'apps')   await loadAllApps();
+    else if (page === 'daylog') await loadDayLog();
+    else if (page === 'weekly') await loadWeekly();
+  }, 900);
+}
+
+function closeCatMenu() {
+  document.getElementById('cat-menu').classList.remove('visible');
+  _catMenuTarget = null;
+}
+
+// Close on any click outside the menu
+document.addEventListener('click', (e) => {
+  const menu = document.getElementById('cat-menu');
+  if (menu.classList.contains('visible') && !menu.contains(e.target)) closeCatMenu();
+});
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeCatMenu(); });
+
 // ─── Init ─────────────────────────────────────────────────────────────────────
-updateDateChip();loadToday();initNotifBanner();
+refreshUserCats().then(() => { updateDateChip();loadToday();initNotifBanner(); });
 
 // Update current-activity timer every 10s — no DOM rebuild, no scroll jump
-setInterval(()=>{if(document.querySelector('.nav-item.active')?.dataset?.page==='today')updateCurrentActivity();},10000);
+setInterval(()=>{if(document.querySelector('.nav-item.active')?.dataset?.page==='today')updateCurrentActivity();},5000);
 
 // Soft background refresh every 60s — only updates stats/charts, preserves scroll position
 setInterval(async ()=>{
@@ -668,7 +908,7 @@ setInterval(async ()=>{
   }
   // Restore scroll position after render
   if(content)requestAnimationFrame(()=>{ content.scrollTop=scrollTop; });
-},60000);
+},15000);
 
 // Detect day change every minute — refresh today page when midnight passes
 let _lastDay=new Date().toDateString();

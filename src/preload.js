@@ -5,6 +5,7 @@ contextBridge.exposeInMainWorld('daylens', {
   getSummary:           (days)                      => ipcRenderer.invoke('get-summary', days),
   getWeekly:            ()                          => ipcRenderer.invoke('get-weekly'),
   setCategory:          (app, category, productive) => ipcRenderer.invoke('set-category', app, category, productive),
+  getUserCategories:    ()                          => ipcRenderer.invoke('get-user-categories'),
   getCurrentActivity:   ()                          => ipcRenderer.invoke('get-current-activity'),
   getDayRows:           (offset)                    => ipcRenderer.invoke('get-day-rows', offset),
   triggerSummary:       ()                          => ipcRenderer.invoke('trigger-summary'),
