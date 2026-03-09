@@ -18,48 +18,42 @@ Everything stays **100% on your device**. No cloud. No account. No subscription.
 
 ## Features
 
-### 🎯 Automatic Tracking
-- Detects your active window every 6 seconds — no manual timers
-- Tracks browser tabs individually via a Chrome/Brave extension
-- Knows when you're idle, asleep, or have locked your screen — stops counting
-- Closes sessions cleanly at midnight so one day never bleeds into the next
+### 🔍 Automatic Tracking
+- Records every app you use, every 6 seconds, completely silently
+- Detects when you're idle, when the screen locks, or when the laptop sleeps — and stops counting
+- Survives battery death and crashes without creating phantom data
+- Smart detection of Windows system processes (never logs lock screen or idle time as activity)
 
-### 🧠 Smart Categorization
-- Every app and website is sorted into: **Deep Work, Learning, Communication, Documents, Browsing, Entertainment, Social Media, System**
-- Context-aware — the same app can mean different things:
-  - YouTube + tutorial title → **Learning**
-  - YouTube + vlog title → **Entertainment**
-  - YouTube Shorts → **Entertainment**
-- AI tools automatically classified as Deep Work: `claude.ai`, `chatgpt.com`, `gemini.google.com`, `perplexity.ai`, `cursor.sh`, and more
-- PDF files, document viewers, and idle time all correctly handled
+### 🌐 Browser Extension (Per-Tab Tracking)
+- Companion extension for Chrome, Brave, and Edge
+- Tracks exactly which websites and tabs you're on, not just "browser is open"
+- SPA-aware — catches navigation on GitHub, Notion, and other single-page apps
+- Reconnects automatically if the browser restarts
 
-### 📊 Today Dashboard
-- Total tracked time, productive time, Focus Score (0–100), apps used
-- Live "Now Tracking" bar with a running timer
-- Donut chart breaking down time by category
-- Top Apps list with category labels and usage bars
-- Hour-by-hour timeline of your full day
+### 🗂 Smart Categorization
+- Automatically categorizes apps into: **Deep Work, Learning, Communication, Documents, Browsing, Entertainment, Social Media, System, Other**
+- Context-aware rules: YouTube music vs YouTube tutorials get different categories; Reddit programming vs Reddit entertainment differ too
+- Recognizes 50+ apps out of the box including Microsoft Office, Adobe suite, Zoom, Slack, VS Code, and more
+- **Right-click any app to manually set its category** — saved permanently, never overwritten by auto-detection
 
-### 📅 Weekly Report
-- 7-day bar chart comparing total vs productive time
-- Weekly Focus Score with ring visualization
-- Best day, daily average, and week total stats
-- Top apps across the full week
-
-### 📋 Day Log
-- Browse any past day hour by hour
-- Activities grouped by app, expandable to see individual page/window visits
-- Navigate backwards through any previous day
-- Export any day as a CSV file
+### 📊 Dashboard Views
+- **Today** — live productivity score, time by category (donut chart), top apps, and a full-day timeline
+- **Weekly** — 7-day bar chart, week total, best day, and focus trend
+- **All Apps** — complete list of everything tracked, sorted by time
+- **Day Log** — hour-by-hour breakdown of your entire day with drill-down per app
 
 ### 📄 PDF Export
-- Export today's report or the weekly report as a polished PDF
-- Includes AI-style contextual insights: peak hour, deep work %, distraction patterns
-- Full app breakdown with category and time
+- Export any day or week as a polished PDF report
+- Includes: stats summary, category breakdown, top apps, hourly chart, and AI-generated insights about your day
+- Dark-themed, print-ready
 
 ### 🔔 Daily Summary Notification
-- Notification at 5:00 PM with your focus score, top apps, and a daily verdict
-- Preview the summary at any time from the dashboard
+- Desktop notification at 5:00 PM every day with your productivity score and top apps
+- Trigger a preview any time from the app
+
+### 🔒 100% Private
+- All data is stored in a local SQLite database on your machine
+- No accounts, no internet connection required, no telemetry
 
 ### 🎨 Themes
 - Dark, Light, and Sepia themes — instant switching, remembered across sessions
@@ -75,6 +69,42 @@ Everything stays **100% on your device**. No cloud. No account. No subscription.
 | Day Log | All Apps |
 |---|---|
 | *![Day Log Screen](image-2.png)* | *gi![All Apps Screen](image-3.png)* |
+
+---
+
+## Quick Start
+
+### Windows
+
+1. Open **Command Prompt** — press `Win + R`, type `cmd`, press Enter
+2. Navigate to this folder:
+   ```
+   cd path\to\daylens
+   ```
+3. Run setup (only needed once):
+   ```
+   setup.bat
+   ```
+4. Launch the app:
+   ```
+   npm start
+   ```
+
+### macOS
+
+1. Open **Terminal**
+2. Navigate to this folder:
+   ```
+   cd /path/to/daylens
+   ```
+3. Run setup (only needed once):
+   ```
+   chmod +x setup.sh && ./setup.sh
+   ```
+4. Launch:
+   ```
+   npm start
+   ```
 
 ---
 
@@ -126,6 +156,18 @@ The browser extension enables per-tab tracking inside Chrome and Brave. Without 
 - When you switch to another app, the browser tab stops counting immediately
 - Tab switches, navigation, and title changes are all tracked
 - A keepalive heartbeat runs every 25 seconds to keep the connection alive — this does **not** create duplicate entries
+
+---
+
+## Using the Day Log
+
+The Day Log shows your full day hour by hour. Each hour block lists every app used, with visit counts and durations.
+
+- **Click** an app row to expand individual visits with timestamps
+- **Right-click** any app to change its category — saved permanently
+- **Export CSV** for spreadsheet analysis
+- **Export PDF** for a shareable daily report
+- Use the **← →** arrows to navigate to previous days
 
 ---
 
@@ -219,12 +261,22 @@ npm start
 
 ## Roadmap
 
-- [ ] Daily goals & alerts (e.g. max 1h LinkedIn, min 4h Deep Work)
-- [ ] Honest Focus Score that penalizes Social Media
+- [x] App tracking + SQLite storage
+- [x] Dashboard: Today, Weekly, All Apps, Day Log views
+- [x] Smart automatic categorization (50+ apps)
+- [x] Manual category override with permanent memory
+- [x] Productivity score + Focus Score
+- [x] Day timeline visualization
+- [x] Browser extension — per-tab tracking
+- [x] PDF export with AI-generated insights
+- [x] Daily summary notification
+- [x] Background audio tracking (webinars, music)
+- [x] Crash / battery-death recovery — no phantom data
+- [x] Idle / lock screen detection
+- [ ] Goals & daily time limits per category
+- [ ] App icons / favicons
 - [ ] Historical trends beyond 7 days
-- [ ] macOS support
-- [ ] Auto-update mechanism
-- [ ] Pomodoro / Focus Mode timer
+- [ ] Auto-start on login
 
 ---
 
@@ -248,7 +300,7 @@ MIT — see [LICENSE](LICENSE) for details.
 
 ## Author
 
-Built by **Gideon Aniechi**  
+Built by **Gideon Aniechi** with all the love in the world.  
 GitHub: [@alagemoo](https://github.com/alagemoo)
 
 ---
