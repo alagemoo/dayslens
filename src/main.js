@@ -123,34 +123,57 @@ async function initDB() {
   }
 
   // ── Startup cleanup: close any stale open activities ──────────────────────
-  // Uses last_alive timestamp to distinguish two cases:
-  //   A) Row started BEFORE last_alive → app was running, cap at 15min (normal crash)
-  //   B) Row started AFTER last_alive  → created after the laptop died / battery ran out
-  //                                      (service worker phantom reconnect). Cap at 0.
-  const IDLE_MAX_MS = 15 * 60 * 1000;
+  // Strategy: use last_alive heartbeat to know exactly when the app last ran.
+  //
+  //   Case A: row started BEFORE last_alive and gap > 2min
+  //           → app was alive when row was created, crashed/died after.
+  //             Cap at started_at + 2min (tight — crash shouldn't count as work).
+  //
+  //   Case B: row started AFTER last_alive
+  //           → app was already dead (battery out, force kill) when row was created.
+  //             These are phantom SW reconnect rows. Collapse to zero, invisible.
+  //
+  //   Case C: last_alive is missing, zero, or suspiciously old (> 24h ago)
+  //           → DB is corrupt / first run / previous broken version.
+  //             Treat ALL unclosed rows as phantom — safest option.
+
+  const CRASH_CAP_MS = 2 * 60 * 1000;   // 2 min cap for real-but-crashed rows
+  const MAX_ALIVE_AGE = 24 * 60 * 60 * 1000; // last_alive older than 24h = suspect
   const _now = Date.now();
 
-  // Read last known alive time from state table
-  let _lastAlive = 0; // default to 0 — on first ever run, all unclosed rows are phantom
+  // Read and validate last_alive
+  // We write a paired 'last_alive_check' = last_alive + 1 every time we write last_alive.
+  // If they don't match, the DB is from a broken previous version — treat as untrusted.
+  let _lastAlive = 0;
   try {
-    const _stateRows = db.exec("SELECT value FROM app_state WHERE key='last_alive'");
+    const _stateRows = db.exec(
+      "SELECT key, value FROM app_state WHERE key IN ('last_alive','last_alive_check')"
+    );
     if (_stateRows.length && _stateRows[0].values.length) {
-      _lastAlive = parseInt(_stateRows[0].values[0][0], 10) || _lastAlive;
+      const _map = {};
+      for (const [k, v] of _stateRows[0].values) _map[k] = parseInt(v, 10);
+      const _ts    = _map['last_alive']       || 0;
+      const _check = _map['last_alive_check'] || 0;
+      const _pairOk = (_check === _ts + 1); // must match exactly
+      // Sanity: real timestamp, not future, not older than 24h, pair matches
+      if (_ts > 0 && _ts <= _now && (_now - _ts) < MAX_ALIVE_AGE && _pairOk) {
+        _lastAlive = _ts;
+      }
+      // Any failure → _lastAlive stays 0 → all unclosed rows treated as phantom (safest)
     }
   } catch(e) {}
 
-  // Case A: rows that existed while app was alive — cap at 15min
+  // Case A: real rows from before last_alive — cap tightly at 2 minutes
   db.run(`
     UPDATE activity
-    SET ended_at = MIN(started_at + ${IDLE_MAX_MS},
+    SET ended_at = MIN(started_at + ${CRASH_CAP_MS},
                        (((started_at / 86400000) + 1) * 86400000))
     WHERE ended_at IS NULL
       AND started_at <= ${_lastAlive}
-      AND started_at < ${_now - IDLE_MAX_MS}
+      AND started_at < ${_now - CRASH_CAP_MS}
   `);
 
-  // Case B: rows started AFTER last_alive — phantom rows from SW reconnects
-  // while the laptop was off. Collapse to zero so they're invisible (< 1s filter).
+  // Case B + C: phantom rows — collapse to zero, filtered out by the >= 1s display filter
   db.run(`
     UPDATE activity
     SET ended_at = started_at
@@ -1191,7 +1214,11 @@ let _aliveHeartbeatInterval = null;
 function writeAliveTimestamp() {
   if (!db) return;
   try {
-    db.run("INSERT OR REPLACE INTO app_state (key, value) VALUES ('last_alive', ?)", [Date.now().toString()]);
+    const ts = Date.now();
+    db.run("INSERT OR REPLACE INTO app_state (key, value) VALUES ('last_alive', ?)", [ts.toString()]);
+    // Also write a secondary 'last_alive_check' that we can compare against on next startup
+    // to detect if the DB was tampered with or is from a different machine
+    db.run("INSERT OR REPLACE INTO app_state (key, value) VALUES ('last_alive_check', ?)", [(ts + 1).toString()]);
     saveDB();
   } catch(e) {}
 }
