@@ -552,7 +552,9 @@ function rowDur(r){
   const sod=new Date(r.started_at);sod.setHours(0,0,0,0);
   const dayEnd=Math.min(sod.getTime()+86400000,now);
   const s=Math.max(r.started_at,sod.getTime());
-  const e=Math.min(r.ended_at||dayEnd,dayEnd);
+  // If ended_at is set (including on bucket-cloned segments), use it directly.
+  // Only fall back to now for genuinely open rows, capped to dayEnd.
+  const e=Math.min(r.ended_at!=null?r.ended_at:now, dayEnd);
   return Math.max(0,e-s);
 }
 // ── Weighted Focus Score ──────────────────────────────────────────────────────
@@ -687,7 +689,15 @@ function daylogPrev(){daylogOffset--;loadDayLog();}
 function daylogNext(){if(daylogOffset<0){daylogOffset++;loadDayLog();}}
 
 async function loadDayLog(){const wrap=document.getElementById('daylog-wrap'),label=document.getElementById('daylog-date-label'),nextBtn=document.getElementById('daylog-next-btn');wrap.innerHTML='<div class="loading">Loading…</div>';const target=daylogDateTarget(daylogOffset),today=new Date();today.setHours(0,0,0,0);const yesterday=new Date(today);yesterday.setDate(today.getDate()-1);if(target.getTime()===today.getTime())label.textContent='Today';else if(target.getTime()===yesterday.getTime())label.textContent='Yesterday';else label.textContent=target.toLocaleDateString('en-US',{weekday:'long',month:'short',day:'numeric'});nextBtn.disabled=(daylogOffset>=0);const rows=await fetchDayRows(daylogOffset);if(!rows.length){wrap.innerHTML=`<div class="empty" style="padding:60px 0"><div class="empty-icon">📋</div><div class="empty-text">No activity recorded for this day</div></div>`;return;}
-const buckets={};for(let h=0;h<24;h++)buckets[h]=[];for(const r of rows){const et=r.ended_at||Date.now(),sh=new Date(r.started_at).getHours(),eh=new Date(et).getHours();if(sh===eh)buckets[sh].push(r);else for(let h=sh;h<=Math.min(eh,23);h++){const ss=h===sh?r.started_at:new Date(r.started_at).setHours(h,0,0,0),se=h===eh?et:new Date(r.started_at).setHours(h+1,0,0,0);if(se>ss)buckets[h].push({...r,started_at:ss,ended_at:se});}}
+const buckets={};for(let h=0;h<24;h++)buckets[h]=[];for(const r of rows){const et=r.ended_at||Date.now(),sh=new Date(r.started_at).getHours(),eh=new Date(et).getHours();if(sh===eh){
+  // Same-hour row: cap open rows to now so rowDur doesn't bleed into future
+  buckets[sh].push({...r, ended_at: et || Date.now()});
+}else for(let h=sh;h<=Math.min(eh,23);h++){
+  const ss=h===sh?r.started_at:new Date(r.started_at).setHours(h,0,0,0);
+  // For the last bucket segment, cap to now (not null) so rowDur is correct
+  const se=h===eh?(et||Date.now()):new Date(r.started_at).setHours(h+1,0,0,0);
+  if(se>ss)buckets[h].push({...r,started_at:ss,ended_at:se});
+}}
 let firstH=23,lastH=0;for(let h=0;h<24;h++){if(buckets[h].length){if(h<firstH)firstH=h;if(h>lastH)lastH=h;}}
 const totalMs=rows.reduce((s,r)=>s+(rowDur(r)),0);const productiveMs=rows.filter(r=>!['Entertainment','Social Media'].includes(guessCategory(r.app_name,r.window_title))).reduce((s,r)=>s+(rowDur(r)),0);const appSet=new Set(rows.map(r=>r.app_name));
 let tableRows='';

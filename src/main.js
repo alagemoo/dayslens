@@ -105,7 +105,11 @@ async function initDB() {
   db.run(`CREATE TABLE IF NOT EXISTS app_state (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL
-  )`);  db.run(`INSERT OR IGNORE INTO app_state (key, value) VALUES ('last_alive', '${Date.now()}')`);
+  )`);
+  // NOTE: We intentionally do NOT write last_alive here.
+  // The startup cleanup reads it first, THEN startTracking() writes the new value.
+  // This preserves the last known alive time for the crash-detection logic below.
+
 
   for (const [a, c, p] of seeds) {
     // System seeds always update UNLESS the user has manually overridden this entry
@@ -127,7 +131,7 @@ async function initDB() {
   const _now = Date.now();
 
   // Read last known alive time from state table
-  let _lastAlive = _now - IDLE_MAX_MS; // safe default
+  let _lastAlive = 0; // default to 0 — on first ever run, all unclosed rows are phantom
   try {
     const _stateRows = db.exec("SELECT value FROM app_state WHERE key='last_alive'");
     if (_stateRows.length && _stateRows[0].values.length) {
