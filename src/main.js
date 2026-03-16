@@ -1043,6 +1043,11 @@ function guessCategory(appName, title) {
        'powershell','cmd','bash','zsh','fish'].some(k => n.includes(k))) {
     return { category: 'System', productive: 1 };
   }
+  // Any remaining value that looks like a domain → Browsing (better than Other)
+  if (n.includes('.') && !n.includes(' ') && n.length < 60) {
+    return { category: 'Browsing', productive: 0 };
+  }
+
   return { category: 'Other', productive: 1 };
 }
 
@@ -1382,8 +1387,32 @@ ipcMain.handle('get-day-rows', (_, offset = 0) => {
 });
 ipcMain.handle('get-ws-port', () => WS_PORT);
 
+ipcMain.handle('get-auto-start', () => {
+  return app.getLoginItemSettings().openAtLogin;
+});
+
+ipcMain.handle('set-auto-start', (_, val) => {
+  app.setLoginItemSettings({ openAtLogin: !!val });
+  return true;
+});
+
 // Returns ALL rows in categories table so renderer can do local lookups
 // without an IPC round-trip per row.
+ipcMain.handle('is-first-launch', () => {
+  if (!db) return false;
+  try {
+    const rows = db.exec("SELECT value FROM app_state WHERE key='onboarding_done'");
+    return !(rows.length && rows[0].values.length);
+  } catch(e) { return false; }
+});
+
+ipcMain.handle('complete-onboarding', () => {
+  if (!db) return;
+  db.run("INSERT OR REPLACE INTO app_state (key,value) VALUES ('onboarding_done','1')");
+  saveDB();
+  return true;
+});
+
 ipcMain.handle('get-user-categories', () => {
   if (!db) return {};
   const rows = db.exec('SELECT app_name, category, productive FROM categories');

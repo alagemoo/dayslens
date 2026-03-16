@@ -1,18 +1,8 @@
-# DayLens — Know Where Your Day Actually Goes
+# DayLens 👁
 
-> An automatic, local-first activity tracker for Windows that shows you exactly how you spend your time — with zero manual input.
+> Know where your day actually goes.
 
-![DayLens Dashboard](https://raw.githubusercontent.com/alagemoo/dayslens/main/assets/icon.png)
-
----
-
-## What is DayLens?
-
-Most people think they work 8 focused hours a day. DayLens shows the truth.
-
-DayLens runs quietly in the background and automatically logs every app you use, every website you visit, and every browser tab you switch to. At the end of the day, you get a clear breakdown: how much was Deep Work, how much was Communication, how much was Entertainment — and a Focus Score that doesn't lie.
-
-Everything stays **100% on your device**. No cloud. No account. No subscription.
+DayLens is a lightweight desktop activity tracker that silently records every app and website you use, then turns that data into clear productivity insights — all stored privately on your own machine, no cloud, no subscription.
 
 ---
 
@@ -55,21 +45,6 @@ Everything stays **100% on your device**. No cloud. No account. No subscription.
 - All data is stored in a local SQLite database on your machine
 - No accounts, no internet connection required, no telemetry
 
-### 🎨 Themes
-- Dark, Light, and Sepia themes — instant switching, remembered across sessions
-
----
-
-## Screenshots
-
-| Today Dashboard | Weekly Report |
-|---|---|
-| *![Today's Dashboard](image.png)* | *![Weekly Report Screen](image-1.png)* |
-
-| Day Log | All Apps |
-|---|---|
-| *![Day Log Screen](image-2.png)* | *gi![All Apps Screen](image-3.png)* |
-
 ---
 
 ## Quick Start
@@ -108,54 +83,18 @@ Everything stays **100% on your device**. No cloud. No account. No subscription.
 
 ---
 
-## Installation
-
-### Requirements
-- Windows 10 or Windows 11 (64-bit)
-- Node.js 18+ (for running from source)
-- Chrome or Brave browser (for browser tab tracking)
-
-### Option A — Run from Source
-
-```bash
-# 1. Clone the repo
-git clone https://github.com/alagemoo/dayslens.git
-cd dayslens
-
-# 2. Install dependencies
-npm install
-
-# 3. Start the app
-npm start
-```
-
-### Option B — Build an Installer
-
-```bash
-npm run build
-```
-
-This creates a Windows installer (`DayLens-Setup.exe`) and a portable version inside the `dist/` folder.
-
----
-
 ## Browser Extension Setup
 
-The browser extension enables per-tab tracking inside Chrome and Brave. Without it, the app only knows "Chrome is open" — with it, it knows exactly which site you're on and for how long.
+For per-tab browser tracking (recommended):
 
-**Install the extension:**
+1. Launch DayLens and go to **Settings & Extensions**
+2. Click **Open Extension Folder**
+3. In your browser go to `chrome://extensions` (or `brave://extensions`)
+4. Enable **Developer mode** (top right toggle)
+5. Click **Load unpacked** and select the extension folder
+6. The extension will connect automatically — you'll see "Connected ✓" in Settings
 
-1. Open Chrome or Brave and go to `chrome://extensions`
-2. Enable **Developer Mode** (toggle in the top right)
-3. Click **Load unpacked**
-4. Select the `assets/extension/` folder from this repo
-5. The DayLens icon will appear in your toolbar — it turns green when connected
-
-**How it works:**
-- The extension tracks only the **active tab in the focused window**
-- When you switch to another app, the browser tab stops counting immediately
-- Tab switches, navigation, and title changes are all tracked
-- A keepalive heartbeat runs every 25 seconds to keep the connection alive — this does **not** create duplicate entries
+> **Note:** If you previously installed an older version of the extension, remove it and reload it fresh to pick up the latest permissions.
 
 ---
 
@@ -171,91 +110,19 @@ The Day Log shows your full day hour by hour. Each hour block lists every app us
 
 ---
 
-## How Categorization Works
+## Data Location
 
-DayLens uses a three-layer system to categorize every activity:
-
-1. **User overrides** — if you've manually set a category for an app, that always wins
-2. **Domain + title rules** — smart per-site logic (e.g. YouTube checks the video title)
-3. **App name fallback** — pattern matching on the application name
-
-### Context-aware examples
-
-| Site | Title Signal | Category |
-|---|---|---|
-| youtube.com | "Python Tutorial for Beginners" | Learning |
-| youtube.com | "Day in my life vlog" | Entertainment |
-| youtube.com | "#Shorts" | Entertainment |
-| reddit.com | "/r/learnprogramming" | Learning |
-| reddit.com | "/r/funny" | Social Media |
-| spotify.com | "Machine Learning podcast" | Learning |
-| spotify.com | Any music | Entertainment |
-
-### AI tools → always Deep Work
-`claude.ai` · `chatgpt.com` · `gemini.google.com` · `perplexity.ai` · `cursor.sh` · `v0.dev` · `replit.com` · `huggingface.co` · `phind.com` · `copilot.microsoft.com`
+Your activity database lives at:
+- **Windows:** `C:\Users\<you>\AppData\Roaming\daylens\daylens.db`
+- **macOS:** `~/Library/Application Support/daylens/daylens.db`
 
 ---
 
-## Data & Privacy
+## Permissions
 
-- **All data is stored locally** in a SQLite database at `%APPDATA%/daylens/daylens.db`
-- No data is ever sent to any server
-- No account required
-- No telemetry of any kind
-- You can delete your data at any time by deleting the `.db` file
+**Windows:** Uses standard Win32 APIs to detect the foreground window — no special permissions required.
 
----
-
-## Project Structure
-
-```
-daylens/
-├── src/
-│   ├── main.js          # Electron main process — tracking, DB, IPC
-│   ├── preload.js       # Bridge between main and renderer
-│   └── renderer/
-│       └── index.html   # Full UI — dashboard, charts, day log
-├── assets/
-│   ├── extension/       # Chrome/Brave browser extension
-│   │   ├── background.js
-│   │   ├── manifest.json
-│   │   └── popup.html
-│   ├── icon.ico
-│   └── icon.png
-├── package.json
-└── README.md
-```
-
----
-
-## Tech Stack
-
-| Layer | Technology |
-|---|---|
-| Desktop shell | Electron 29 |
-| Database | sql.js (SQLite, in-memory + file persistence) |
-| Window detection | PowerShell (Windows API) |
-| Browser tracking | Chrome Extension (Manifest V3) |
-| Communication | WebSocket (ws://127.0.0.1:43821) |
-| UI | Vanilla HTML/CSS/JS — no framework |
-| Build | electron-builder |
-
----
-
-## Development
-
-```bash
-# Run in development mode
-npm start
-
-# The app uses a file watcher — edit index.html and reload the window (Ctrl+R)
-# Main process changes require restarting npm start
-```
-
-**Key files to know:**
-- `src/main.js` — all tracking logic, DB queries, IPC handlers, WebSocket server
-- `src/renderer/index.html` — entire frontend in one file
-- `assets/extension/background.js` — browser extension service worker
+**macOS:** You'll be prompted to grant **Accessibility** access under System Preferences → Privacy & Security → Accessibility. This is required to read the active app name.
 
 ---
 
@@ -280,29 +147,16 @@ npm start
 
 ---
 
-## Contributing
+## Tech Stack
 
-Pull requests are welcome. For major changes, please open an issue first to discuss what you'd like to change.
-
-1. Fork the repo
-2. Create a branch: `git checkout -b feature/your-feature`
-3. Commit your changes: `git commit -m "Add your feature"`
-4. Push: `git push origin feature/your-feature`
-5. Open a Pull Request
+- **Electron** — cross-platform desktop shell
+- **sql.js** — SQLite compiled to WebAssembly, runs in-process
+- **PowerShell** (Windows) / **osascript** (macOS) — active window detection
+- **WebSocket** — local communication between app and browser extension
+- **Chromium extension APIs** — tab/URL tracking in the browser
 
 ---
 
 ## License
 
-MIT — see [LICENSE](LICENSE) for details.
-
----
-
-## Author
-
-Built by **Gideon Aniechi** with all the love in the world.  
-GitHub: [@alagemoo](https://github.com/alagemoo)
-
----
-
-*DayLens — because what gets measured, gets managed.*
+MIT
