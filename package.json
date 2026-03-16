@@ -16,14 +16,14 @@
     "electron-builder": "^24.13.3"
   },
   "author": {
-    "name": "DayLens",
+    "name": "Gideon Aniechi",
     "email": "hello@daylens.app"
   },
   "license": "MIT",
   "build": {
     "appId": "app.daylens.desktop",
     "productName": "DayLens",
-    "copyright": "Copyright \u00a9 2025 DayLens",
+    "copyright": "Copyright © 2026 Valion Technologies Limited",
     "directories": {
       "output": "dist"
     },
@@ -58,7 +58,9 @@
         }
       ],
       "icon": "assets/icon.ico",
-      "requestedExecutionLevel": "asInvoker"
+      "requestedExecutionLevel": "asInvoker",
+      "executableName": "DayLens",
+      "signAndEditExecutable": false
     },
     "nsis": {
       "oneClick": false,
@@ -73,7 +75,8 @@
       "include": "assets/installer.nsh",
       "runAfterFinish": true,
       "perMachine": false,
-      "menuCategory": "DayLens"
+      "menuCategory": "DayLens",
+      "artifactName": "DayLens-Setup-${version}.exe"
     },
     "portable": {
       "artifactName": "DayLens-Portable-${version}.exe"

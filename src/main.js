@@ -1442,9 +1442,11 @@ let tray = null;
 
 function createWindow() {
   const startHidden = process.argv.includes('--hidden');
+  const appIcon = path.join(__dirname, '../assets/icon.ico');
   mainWindow = new BrowserWindow({
     width: 1200, height: 780, minWidth: 900, minHeight: 600,
     backgroundColor: '#06070f',
+    icon: appIcon,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -1703,9 +1705,11 @@ app.whenReady().then(async () => {
   scheduleSummary();
 
   try {
-    const iconPath = path.join(__dirname, '../assets/icon.png');
-    if (fs.existsSync(iconPath)) {
-      const img = nativeImage.createFromPath(iconPath);
+    const iconPath = path.join(__dirname, '../assets/icon.ico');
+    const iconFallback = path.join(__dirname, '../assets/icon.png');
+    const resolvedIcon = fs.existsSync(iconPath) ? iconPath : iconFallback;
+    if (fs.existsSync(resolvedIcon)) {
+      const img = nativeImage.createFromPath(resolvedIcon);
       tray = new Tray(img.resize({ width: 16, height: 16 }));
       tray.setToolTip('DayLens');
       tray.setContextMenu(Menu.buildFromTemplate([
