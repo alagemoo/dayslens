@@ -6,6 +6,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
+<script src="https://js.puter.com/v2/"></script>
 <style>
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
 :root{--r:14px;--r-sm:9px;--r-xs:6px;--transition:0.22s cubic-bezier(0.4,0,0.2,1)}
@@ -292,6 +293,52 @@ html,body{width:100%;height:100%;overflow:hidden;background:var(--bg);color:var(
 ::-webkit-scrollbar-track{background:transparent}
 ::-webkit-scrollbar-thumb{background:var(--border2);border-radius:2px}
 ::-webkit-scrollbar-thumb:hover{background:var(--muted)}
+/* Extension sidebar badge */
+.ext-sidebar-badge{display:flex;align-items:center;gap:8px;padding:7px 12px;border-radius:var(--r-sm);border:1px solid var(--border);transition:all 0.2s;cursor:default}
+.ext-sidebar-badge.connected{border-color:rgba(46,201,154,0.18);background:rgba(46,201,154,0.04)}
+.ext-sidebar-badge.disconnected{border-color:rgba(245,133,74,0.18);background:rgba(245,133,74,0.04)}
+.ext-sidebar-badge.stale{border-color:rgba(240,188,58,0.18);background:rgba(240,188,58,0.04)}
+.ext-sidebar-dot{width:6px;height:6px;border-radius:50%;background:var(--muted);flex-shrink:0;transition:background 0.2s}
+.ext-sidebar-badge.connected .ext-sidebar-dot{background:var(--green);box-shadow:0 0 5px rgba(46,201,154,0.5);animation:pulse-anim 2.5s infinite}
+.ext-sidebar-badge.disconnected .ext-sidebar-dot{background:var(--orange)}
+.ext-sidebar-badge.stale .ext-sidebar-dot{background:var(--yellow)}
+.ext-sidebar-text{font-size:10.5px;color:var(--muted);font-weight:500;transition:color 0.2s}
+.ext-sidebar-badge.connected .ext-sidebar-text{color:var(--green)}
+.ext-sidebar-badge.disconnected .ext-sidebar-text{color:var(--orange)}
+.ext-sidebar-badge.stale .ext-sidebar-text{color:var(--yellow)}
+/* AI Summary page */
+.summary-card{background:var(--card-bg);border:1px solid var(--card-border);border-radius:var(--r);padding:22px 26px;margin-bottom:16px;transition:border-color var(--transition),background var(--transition)}
+.summary-card:hover{border-color:var(--border2)}
+.summary-narrative{font-size:14px;line-height:1.8;color:var(--text);white-space:pre-wrap}
+.summary-narrative strong{color:var(--accent)}
+.summary-section-title{font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:0.15em;margin-bottom:12px}
+.summary-generating{display:flex;align-items:center;gap:12px;padding:36px 24px;justify-content:center}
+.summary-spinner{width:18px;height:18px;border:2.5px solid var(--border2);border-top-color:var(--accent);border-radius:50%;animation:spin 0.8s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+.summary-gen-text{font-size:13px;color:var(--muted);font-weight:500}
+.summary-stream{font-size:14px;line-height:1.8;color:var(--text)}
+.summary-stream p{margin-bottom:12px}
+.summary-error{text-align:center;padding:36px;color:var(--orange)}
+.summary-error-icon{font-size:24px;margin-bottom:10px}
+.summary-error-text{font-size:13px;line-height:1.6}
+.summary-no-data{text-align:center;padding:48px;color:var(--muted)}
+/* Time Log Table */
+.timelog-table-wrap{overflow-x:auto;margin-top:4px}
+.timelog-table{width:100%;border-collapse:collapse;font-size:12.5px}
+.timelog-table thead th{font-size:9.5px;text-transform:uppercase;letter-spacing:0.12em;color:var(--muted);font-weight:700;padding:8px 10px;border-bottom:1px solid var(--border);text-align:left;white-space:nowrap}
+.timelog-table thead th:last-child{text-align:right}
+.timelog-row{transition:background 0.12s}
+.timelog-row:hover{background:var(--surface2)}
+.timelog-row td{padding:10px 10px;border-bottom:1px solid var(--border);vertical-align:top}
+.timelog-time{font-family:'JetBrains Mono',monospace;font-size:12px;color:var(--text2);white-space:nowrap;font-weight:500;width:70px}
+.timelog-task{min-width:200px}
+.timelog-task-text{font-size:13px;color:var(--text2);font-weight:500;line-height:1.4;transition:color 0.3s}
+.timelog-task-apps{font-size:10px;color:var(--muted);margin-top:3px}
+.timelog-cat-pill{font-size:9.5px;padding:2px 9px;border-radius:12px;font-weight:600;white-space:nowrap;display:inline-block}
+.timelog-dur{font-family:'JetBrains Mono',monospace;font-size:12px;color:var(--muted);text-align:right;white-space:nowrap;font-weight:500;width:60px}
+.timelog-total-row td{padding:12px 10px;border-top:2px solid var(--border2);border-bottom:none}
+.summary-header-row{display:flex;align-items:center;justify-content:space-between;margin-bottom:4px}
+.summary-badge{font-size:10px;padding:3px 10px;border-radius:20px;font-weight:600;background:var(--glow);color:var(--accent);border:1px solid rgba(91,156,246,0.2)}
 </style>
 </head>
 <body>
@@ -400,9 +447,14 @@ html,body{width:100%;height:100%;overflow:hidden;background:var(--bg);color:var(
       <div class="nav-section-label" style="margin-top:4px">Details</div>
       <div class="nav-item" data-page="apps"   onclick="navigate('apps',this)"><span class="nav-icon">⊞</span> All Apps</div>
       <div class="nav-item" data-page="daylog" onclick="navigate('daylog',this)"><span class="nav-icon">📋</span> Day Log</div>
+      <div class="nav-item" data-page="summary" onclick="navigate('summary',this)"><span class="nav-icon">🧠</span> Day Summary</div>
     </nav>
     <div class="sidebar-bottom">
       <div class="tracking-badge"><div class="pulse"></div><span class="tracking-text">Tracking active</span></div>
+      <div class="ext-sidebar-badge" id="ext-sidebar-badge" title="Browser extension status">
+        <div class="ext-sidebar-dot" id="ext-sidebar-dot"></div>
+        <span class="ext-sidebar-text" id="ext-sidebar-text">Extension: checking…</span>
+      </div>
       <div class="settings-trigger" onclick="openSettings()"><span style="font-size:14px">⚙</span><span>Settings & Extensions</span></div>
     </div>
   </aside>
@@ -484,6 +536,19 @@ html,body{width:100%;height:100%;overflow:hidden;background:var(--bg);color:var(
         <div id="daylog-wrap"><div class="loading">Loading…</div></div>
       </div>
 
+      <!-- AI DAY SUMMARY -->
+      <div class="page" id="page-summary">
+        <div class="daylog-toolbar">
+          <div class="daylog-date-nav">
+            <button class="daylog-nav-btn" onclick="summaryPrev()">‹</button>
+            <div class="daylog-date-label" id="summary-date-label">Today</div>
+            <button class="daylog-nav-btn" onclick="summaryNext()" id="summary-next-btn">›</button>
+          </div>
+          <button class="topbar-btn" style="font-size:11px;padding:5px 12px" onclick="loadSummary()" id="summary-regen-btn">↻ Regenerate</button>
+        </div>
+        <div id="summary-wrap"><div class="loading">Loading…</div></div>
+      </div>
+
     </div>
   </main>
 </div>
@@ -561,7 +626,7 @@ html,body{width:100%;height:100%;overflow:hidden;background:var(--bg);color:var(
     <div>
       <div class="settings-section-title">About</div>
       <div style="font-size:12px;color:var(--muted);line-height:1.9">
-        <div><strong style="color:var(--text2)">DayLens</strong> v1.0.0</div>
+        <div><strong style="color:var(--text2)">DayLens</strong> v1.2.0</div>
         <div>Local activity tracker — no data leaves your device.</div>
       </div>
     </div>
@@ -884,10 +949,10 @@ function scoreGrade(s){
 }
 
 // ─── Navigation ──────────────────────────────────────────────────────────────
-const PAGE_TITLES={today:'Today',weekly:'Weekly Report',apps:'All Apps',daylog:'Day Log'};
+const PAGE_TITLES={today:'Today',weekly:'Weekly Report',apps:'All Apps',daylog:'Day Log',summary:'Day Summary'};
 function navigate(id,el){document.querySelectorAll('.nav-item').forEach(n=>n.classList.remove('active'));document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));el.classList.add('active');document.getElementById('page-'+id).classList.add('active');document.getElementById('page-title').textContent=PAGE_TITLES[id];loadPage(id);}
 function loadCurrentPage(){const a=document.querySelector('.nav-item.active');if(a)loadPage(a.dataset.page);}
-function loadPage(id){if(id==='daylog')loadDayLog();else if(id==='today')loadToday();else if(id==='weekly')loadWeekly();else if(id==='apps')loadAllApps();}
+function loadPage(id){if(id==='daylog')loadDayLog();else if(id==='today')loadToday();else if(id==='weekly')loadWeekly();else if(id==='apps')loadAllApps();else if(id==='summary')loadSummary();}
 function updateDateChip(){document.getElementById('date-chip').textContent=new Date().toLocaleDateString('en-US',{weekday:'long',month:'long',day:'numeric'});}
 
 // ─── Current Activity ─────────────────────────────────────────────────────────
@@ -1253,6 +1318,362 @@ setInterval(()=>{
     }
   }
 },60000);
+
+// ── Extension Status Polling ─────────────────────────────────────────────────
+async function updateExtensionStatus() {
+  try {
+    const status = await window.daylens.getExtensionStatus();
+    const badge = document.getElementById('ext-sidebar-badge');
+    const dot   = document.getElementById('ext-sidebar-dot');
+    const text  = document.getElementById('ext-sidebar-text');
+    if (!badge) return;
+
+    badge.classList.remove('connected','disconnected','stale');
+    if (status.connected) {
+      badge.classList.add('connected');
+      text.textContent = 'Extension: connected';
+    } else if (status.stale) {
+      badge.classList.add('stale');
+      text.textContent = 'Extension: stale';
+    } else {
+      badge.classList.add('disconnected');
+      text.textContent = 'Extension: not connected';
+    }
+  } catch(e) {}
+}
+// Poll extension status every 10s
+updateExtensionStatus();
+setInterval(updateExtensionStatus, 10000);
+
+// ── AI Day Summary ──────────────────────────────────────────────────────────
+let summaryOffset = 0;
+function summaryPrev() { summaryOffset--; loadSummary(); }
+function summaryNext() { if (summaryOffset < 0) { summaryOffset++; loadSummary(); } }
+
+async function loadSummary() {
+  const wrap = document.getElementById('summary-wrap');
+  const label = document.getElementById('summary-date-label');
+  const nextBtn = document.getElementById('summary-next-btn');
+
+  // Update date label
+  const target = new Date();
+  target.setDate(target.getDate() + summaryOffset);
+  target.setHours(0,0,0,0);
+  const today = new Date(); today.setHours(0,0,0,0);
+  const yesterday = new Date(today); yesterday.setDate(today.getDate() - 1);
+  if (target.getTime() === today.getTime()) label.textContent = 'Today';
+  else if (target.getTime() === yesterday.getTime()) label.textContent = 'Yesterday';
+  else label.textContent = target.toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' });
+  nextBtn.disabled = (summaryOffset >= 0);
+
+  // Show loading
+  wrap.innerHTML = `<div class="summary-generating"><div class="summary-spinner"></div><div class="summary-gen-text">Analyzing your day with AI…</div></div>`;
+
+  try {
+    const data = await window.daylens.getDailySummaryData(summaryOffset);
+    if (!data || data.totalMs < 60000) {
+      wrap.innerHTML = `<div class="summary-no-data"><div style="font-size:28px;margin-bottom:10px;opacity:0.35">🧠</div><div style="font-size:13px;line-height:1.6">No significant activity recorded for this day.<br>Use DayLens throughout the day, then check back here for your AI summary.</div></div>`;
+      return;
+    }
+
+    // First render the local time log immediately (no API needed)
+    renderTimeLog(wrap, data);
+
+    // Then call AI to generate the narrative + smart task descriptions
+    const prompt = buildSummaryPrompt(data);
+    const aiCard = document.getElementById('ai-narrative-card');
+    if (aiCard) aiCard.innerHTML = `<div class="summary-generating"><div class="summary-spinner"></div><div class="summary-gen-text">Writing your AI analysis via Puter.js…</div></div>`;
+
+    try {
+      const response = await puter.ai.chat(prompt, {
+        model: 'gpt-4o-mini',
+      });
+
+      // puter.ai.chat returns response directly (string or object)
+      let text = '';
+      if (typeof response === 'string') {
+        text = response;
+      } else if (response?.message?.content) {
+        // Some models return { message: { content: ... } }
+        const content = response.message.content;
+        if (typeof content === 'string') text = content;
+        else if (Array.isArray(content)) text = content.map(c => c.text || '').join('');
+        else text = String(content);
+      } else if (response?.text) {
+        text = response.text;
+      } else {
+        text = String(response);
+      }
+
+      if (!text || text.length < 20) throw new Error('Empty AI response');
+
+      // Parse AI response and inject into the time log
+      injectAIEnhancements(data, text);
+    } catch(aiErr) {
+      console.error('AI enhancement error:', aiErr);
+      if (aiCard) aiCard.innerHTML = `<div style="font-size:12px;color:var(--muted);padding:12px;text-align:center">⚡ AI analysis unavailable — showing local summary. <button class="topbar-btn" style="font-size:11px;padding:3px 10px;margin-left:8px" onclick="loadSummary()">Retry</button></div>`;
+    }
+
+  } catch(e) {
+    console.error('Summary error:', e);
+    wrap.innerHTML = `<div class="summary-error"><div class="summary-error-icon">⚠️</div><div class="summary-error-text">Could not generate summary.<br><button class="topbar-btn" style="margin-top:12px" onclick="loadSummary()">Try Again</button></div></div>`;
+  }
+}
+
+function buildSummaryPrompt(data) {
+  const fmtMs = (ms) => {
+    const h = Math.floor(ms / 3600000);
+    const m = Math.floor((ms % 3600000) / 60000);
+    if (h > 0) return `${h}h ${m}m`;
+    return `${m}m`;
+  };
+
+  const blocksStr = data.timeBlocks.map(b => {
+    const startTime = new Date(b.start).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const endTime = new Date(b.end).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const titles = (b.titles || []).slice(0, 5).map(t =>
+      t.replace(/ [-–|].*?(YouTube|Brave|Chrome|Google|Reddit|LinkedIn|Mozilla|Firefox|Edge|Safari|Opera).*$/i, '')
+       .replace(/\(\d+\)\s*/g, '')
+       .trim().substring(0, 100)
+    ).filter(t => t.length > 2);
+    return `${startTime}–${endTime} | Apps: ${b.apps.join(', ')} | ${b.category} | ${fmtMs(b.duration)}${titles.length ? '\n  Titles: ' + titles.join(' | ') : ''}`;
+  }).join('\n');
+
+  const topAppsStr = data.topApps.map(a => {
+    const ct = a.titles.slice(0, 4).map(t =>
+      t.replace(/ [-–|].*?(YouTube|Brave|Chrome|Google|Reddit|LinkedIn|Mozilla|Firefox|Edge).*$/i, '')
+       .replace(/\(\d+\)\s*/g, '').trim().substring(0, 80)
+    ).filter(t => t.length > 2);
+    return `- ${a.app} (${a.category}, ${fmtMs(a.ms)})${ct.length ? ': ' + ct.join('; ') : ''}`;
+  }).join('\n');
+
+  return `You are an intelligent productivity analyst for DayLens, a desktop activity tracker. Transform raw computer activity into a professional daily time log suitable for company submission.
+
+DATE: ${data.date}
+TOTALS: ${fmtMs(data.totalMs)} tracked, ${fmtMs(data.productiveMs)} productive (${data.score}%), ${data.appCount} apps
+
+RAW ACTIVITY BLOCKS (what the computer recorded):
+${blocksStr}
+
+TOP APPS:
+${topAppsStr}
+
+Respond with EXACTLY two sections separated by "---":
+
+SECTION 1 — PROFESSIONAL TIME LOG:
+Convert each block into a professional task description.
+Format: START–END | Task description | Duration
+
+INFERENCE RULES — do NOT just list app names, TRANSLATE into work:
+• VS Code / Code / Sublime / cursor.sh → "Software development" or infer project from titles
+• claude.ai / chatgpt.com / gemini → "AI-assisted research & development"
+• github.com → "Code review & version control"
+• Google Docs / Notion / Word → "Documentation & writing"
+• YouTube + tutorial titles → "Technical learning: [topic from title]"
+• YouTube + entertainment titles → "Personal break — media"
+• gmail / Outlook / Slack → "Email & team communication"
+• stackoverflow.com → "Technical research & debugging"
+• figma / Canva / Inkscape → "Design work"
+• localhost / IP addresses → "Local development & server testing"
+• OBS Studio → "Screen recording / content production"
+• BibleShow / Healing Streams / religious content → "Personal — religious media"
+• Download managers (IDM) → skip or merge into adjacent block
+• Quick switches (<3min) → merge into the dominant activity
+Keep descriptions 5-15 words. Be honest about personal/entertainment time.
+
+SECTION 2 — DAY NARRATIVE (2-3 paragraphs, under 180 words):
+Describe actual work flow. Highlight longest focus block. Note patterns. One specific tip for tomorrow. Use **bold** for key metrics.`;
+}
+
+function renderTimeLog(wrap, data) {
+  const score = data.score;
+  const grade = scoreGrade(score);
+  const catEntries = Object.entries(data.catTotals).sort((a, b) => b[1] - a[1]);
+  const fmtHour = (h) => h === 0 ? '12 AM' : h < 12 ? h + ' AM' : h === 12 ? '12 PM' : (h - 12) + ' PM';
+
+  // Build time log rows from timeBlocks
+  const logRows = data.timeBlocks.filter(b => b.duration >= 60000).map(b => {
+    const startTime = new Date(b.start).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const endTime = new Date(b.end).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const color = CAT_COLORS[b.category] || '#64748b';
+    // Build a local task description from app names + titles
+    const titles = (b.titles || []).slice(0, 3).map(t =>
+      t.replace(/ [-–|].*?(YouTube|Brave|Chrome|Google|Reddit|LinkedIn|Mozilla|Firefox|Edge).*$/i, '').trim().substring(0, 60)
+    ).filter(Boolean);
+    const localDesc = titles.length
+      ? titles[0] + (titles.length > 1 ? ` (+${titles.length - 1} more)` : '')
+      : b.apps.join(', ');
+
+    return {
+      start: startTime,
+      end: endTime,
+      apps: b.apps,
+      category: b.category,
+      color,
+      duration: b.duration,
+      localDesc,
+      aiDesc: null, // will be filled by AI later
+    };
+  });
+
+  // Store for AI injection later
+  window._timeLogRows = logRows;
+
+  const timeLogHtml = logRows.map((r, i) => `
+    <tr class="timelog-row">
+      <td class="timelog-time">${r.start}</td>
+      <td class="timelog-time">${r.end}</td>
+      <td class="timelog-task" id="timelog-task-${i}">
+        <div class="timelog-task-text">${esc(r.localDesc)}</div>
+        <div class="timelog-task-apps">${r.apps.map(a => esc(a)).join(', ')}</div>
+      </td>
+      <td><span class="timelog-cat-pill" style="background:${r.color}22;color:${r.color};border:1px solid ${r.color}44">${r.category}</span></td>
+      <td class="timelog-dur">${msToHuman(r.duration)}</td>
+    </tr>
+  `).join('');
+
+  wrap.innerHTML = `
+    <div class="summary-card" style="border-top:2px solid ${grade.color}">
+      <div class="summary-header-row">
+        <div class="summary-section-title" style="margin-bottom:0">📋 Time Log — ${data.date}</div>
+        <div style="display:flex;gap:8px;align-items:center">
+          <div class="summary-badge">${grade.label} · Score ${score}</div>
+          <button class="topbar-btn" style="font-size:11px;padding:4px 10px" onclick="copyTimeLog()">📋 Copy</button>
+        </div>
+      </div>
+      <div style="margin-top:14px;display:flex;gap:16px;margin-bottom:18px;flex-wrap:wrap">
+        <div style="font-size:12px;color:var(--text2)">⏱ <strong style="color:var(--accent)">${msToHuman(data.totalMs)}</strong> tracked</div>
+        <div style="font-size:12px;color:var(--text2)">🎯 <strong style="color:var(--green)">${msToHuman(data.productiveMs)}</strong> productive</div>
+        <div style="font-size:12px;color:var(--text2)">📱 <strong style="color:var(--purple)">${data.appCount}</strong> apps</div>
+        ${data.peakHour ? `<div style="font-size:12px;color:var(--text2)">⏰ Peak: <strong style="color:var(--yellow)">${fmtHour(data.peakHour.hour)}</strong></div>` : ''}
+      </div>
+      <div class="timelog-table-wrap">
+        <table class="timelog-table">
+          <thead>
+            <tr>
+              <th>Start</th>
+              <th>End</th>
+              <th>Task / Activity</th>
+              <th>Category</th>
+              <th style="text-align:right">Duration</th>
+            </tr>
+          </thead>
+          <tbody>${timeLogHtml}</tbody>
+          <tfoot>
+            <tr class="timelog-total-row">
+              <td colspan="4" style="text-align:right;font-weight:700;color:var(--text2)">Total Logged</td>
+              <td class="timelog-dur" style="font-weight:800;color:var(--accent)">${msToHuman(data.totalMs)}</td>
+            </tr>
+          </tfoot>
+        </table>
+      </div>
+    </div>
+    <div class="summary-card" id="ai-narrative-card">
+      <div class="summary-generating"><div class="summary-spinner"></div><div class="summary-gen-text">Generating AI insights…</div></div>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
+      <div class="summary-card">
+        <div class="summary-section-title">Time Distribution</div>
+        <div style="display:flex;flex-direction:column;gap:8px">
+          ${catEntries.map(([cat, ms]) => {
+            const pct = Math.round(ms / data.totalMs * 100);
+            const color = CAT_COLORS[cat] || '#64748b';
+            return `<div style="display:flex;align-items:center;gap:10px">
+              <div style="width:8px;height:8px;border-radius:2px;background:${color};flex-shrink:0"></div>
+              <div style="flex:1;font-size:12px;color:var(--text2);font-weight:500">${cat}</div>
+              <div style="width:100px;height:4px;background:var(--border2);border-radius:2px;overflow:hidden"><div style="width:${pct}%;height:100%;background:${color};border-radius:2px"></div></div>
+              <div style="font-size:11px;color:var(--muted);min-width:36px;text-align:right">${msToHuman(ms)}</div>
+              <div style="font-size:10px;color:var(--muted);width:28px;text-align:right">${pct}%</div>
+            </div>`;
+          }).join('')}
+        </div>
+      </div>
+      <div class="summary-card">
+        <div class="summary-section-title">Top Apps</div>
+        <div style="display:flex;flex-direction:column;gap:4px">
+          ${data.topApps.slice(0, 6).map(a => {
+            const color = CAT_COLORS[a.category] || '#64748b';
+            return `<div style="display:flex;align-items:center;gap:8px;padding:4px 6px">
+              ${appIcon(a.app)}
+              <div style="flex:1;min-width:0"><div style="font-size:11.5px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(a.app)}</div></div>
+              <div style="font-size:10.5px;color:var(--muted)">${msToHuman(a.ms)}</div>
+            </div>`;
+          }).join('')}
+        </div>
+      </div>
+    </div>`;
+}
+
+function injectAIEnhancements(data, aiText) {
+  const parts = aiText.split('---');
+  const timeLogPart = parts[0] || '';
+  const narrativePart = parts.slice(1).join('---') || '';
+
+  // Parse AI time log descriptions and inject into the table
+  const aiLines = timeLogPart.split('\n').filter(l => l.includes('|') && l.match(/\d/));
+  const rows = window._timeLogRows || [];
+
+  for (let i = 0; i < Math.min(aiLines.length, rows.length); i++) {
+    const segments = aiLines[i].split('|').map(s => s.trim());
+    // The task description is typically the second segment
+    const desc = segments.length >= 3 ? segments[1] : segments[segments.length - 1];
+    if (desc && desc.length > 3) {
+      rows[i].aiDesc = desc;
+      const cell = document.getElementById(`timelog-task-${i}`);
+      if (cell) {
+        const taskText = cell.querySelector('.timelog-task-text');
+        if (taskText) {
+          taskText.textContent = desc;
+          taskText.style.color = 'var(--text)';
+        }
+      }
+    }
+  }
+
+  // Inject narrative
+  const aiCard = document.getElementById('ai-narrative-card');
+  if (aiCard && narrativePart.trim()) {
+    const formatted = narrativePart.trim()
+      .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+      .replace(/\n\n/g, '</p><p>')
+      .replace(/\n/g, '<br>');
+    aiCard.innerHTML = `
+      <div class="summary-section-title">🧠 AI Analysis</div>
+      <div class="summary-narrative"><p>${formatted}</p></div>`;
+  } else if (aiCard && !narrativePart.trim()) {
+    aiCard.innerHTML = '';
+  }
+}
+
+function copyTimeLog() {
+  const rows = window._timeLogRows || [];
+  if (!rows.length) return;
+
+  let text = 'TIME LOG\n';
+  text += '─'.repeat(60) + '\n';
+  text += 'Start     End       Duration  Task / Activity\n';
+  text += '─'.repeat(60) + '\n';
+
+  let totalMs = 0;
+  for (const r of rows) {
+    const desc = r.aiDesc || r.localDesc;
+    const dur = msToHuman(r.duration).padEnd(9);
+    text += `${r.start.padEnd(10)}${r.end.padEnd(10)}${dur} ${desc}\n`;
+    totalMs += r.duration;
+  }
+
+  text += '─'.repeat(60) + '\n';
+  text += `${''.padEnd(20)}${msToHuman(totalMs).padEnd(9)} TOTAL\n`;
+
+  navigator.clipboard.writeText(text).then(() => {
+    const btn = document.querySelector('[onclick="copyTimeLog()"]');
+    if (btn) {
+      btn.textContent = '✓ Copied!';
+      btn.style.color = 'var(--green)';
+      setTimeout(() => { btn.textContent = '📋 Copy'; btn.style.color = ''; }, 2500);
+    }
+  });
+}
 </script>
 </body>
 </html>

@@ -18,4 +18,7 @@ contextBridge.exposeInMainWorld('daylens', {
   getExtensionInfo:     ()                          => ipcRenderer.invoke('get-extension-info'),
   openExtensionFolder:  ()                          => ipcRenderer.invoke('open-extension-folder'),
   openBrowserExtensions:(browser)                   => ipcRenderer.invoke('open-browser-extensions', browser),
+  // New APIs
+  getExtensionStatus:   ()                          => ipcRenderer.invoke('get-extension-status'),
+  getDailySummaryData:  (offset)                    => ipcRenderer.invoke('get-daily-summary-data', offset),
 });

@@ -6,6 +6,16 @@ const { execSync } = require('child_process');
 
 const initSqlJs = require('sql.js');
 
+// ── Single instance lock — prevent multiple windows ──────────────────────────
+const gotTheLock = app.requestSingleInstanceLock();
+if (!gotTheLock) {
+  // Another instance is already running — focus it and quit this one
+  app.quit();
+  // app.quit() is async — but module-level code below will still run.
+  // That's fine: initDB/createWindow only happen inside app.whenReady()
+  // which won't fire because we called quit(). No harm, no race.
+}
+
 let db = null;
 const userDataPath = app.getPath('userData');
 const DB_PATH     = path.join(userDataPath, 'daylens.db');
@@ -230,6 +240,11 @@ const WS_PORT = 43821;
 let wsClients = new Set();
 let wsServer = null;
 
+// ── Extension connection status tracking ─────────────────────────────────────
+let _extensionConnectedSince = null;   // timestamp when first WS client connected
+let _extensionLastMessage = null;      // timestamp of last message received from extension
+let _extensionClientCount = 0;         // number of active WS connections
+
 function startWebSocketServer() {
   // Minimal WebSocket handshake + framing — no npm package needed
   wsServer = http.createServer();
@@ -260,6 +275,8 @@ function startWebSocketServer() {
 
     socket.isAlive = true;
     wsClients.add(socket);
+    _extensionClientCount = wsClients.size;
+    if (!_extensionConnectedSince) _extensionConnectedSince = Date.now();
 
     // Buffer for incomplete frames across TCP packets
     let _frameBuffer = Buffer.alloc(0);
@@ -268,12 +285,17 @@ function startWebSocketServer() {
       const { messages, remaining } = decodeWsFrames(_frameBuffer);
       _frameBuffer = remaining;
       for (const msg of messages) {
-        try { handleBrowserEvent(JSON.parse(msg)); } catch(e) {}
+        try {
+          _extensionLastMessage = Date.now();
+          handleBrowserEvent(JSON.parse(msg));
+        } catch(e) {}
       }
     });
 
     socket.on('close', () => {
       wsClients.delete(socket);
+      _extensionClientCount = wsClients.size;
+      if (_extensionClientCount === 0) _extensionConnectedSince = null;
       const _now = Date.now();
       if (currentBrowserActivity) {
         db.run(`UPDATE activity SET ended_at=? WHERE id=?`, [_now, currentBrowserActivity.id]);
@@ -285,6 +307,8 @@ function startWebSocketServer() {
     socket.on('error', () => {
       socket.destroy();
       wsClients.delete(socket);
+      _extensionClientCount = wsClients.size;
+      if (_extensionClientCount === 0) _extensionConnectedSince = null;
       if (currentBrowserActivity) {
         db.run(`UPDATE activity SET ended_at=? WHERE id=?`, [Date.now(), currentBrowserActivity.id]);
         currentBrowserActivity = null;
@@ -1058,6 +1082,62 @@ const IDLE_MS = 5 * 60 * 1000;
 const POLL_MS = 6000;
 let trackingInterval = null;
 
+// ── OS-level user input idle detection ──────────────────────────────────────
+// Uses Windows GetLastInputInfo to know the REAL last time the user touched
+// keyboard/mouse. This catches the "laptop charging overnight with screen on"
+// scenario where the browser extension keeps sending heartbeats but the user
+// is actually asleep.
+const _idleScript = process.platform === 'win32' ? null : undefined; // will be set on first call
+let _idleScriptPath = null;
+
+function getSystemIdleMs() {
+  if (process.platform === 'win32') {
+    try {
+      if (!_idleScriptPath) {
+        _idleScriptPath = path.join(app.getPath('temp'), 'daylens_idle.ps1');
+        fs.writeFileSync(_idleScriptPath, `
+Add-Type @"
+using System;
+using System.Runtime.InteropServices;
+public class IdleTime {
+    [DllImport("user32.dll")]
+    static extern bool GetLastInputInfo(ref LASTINPUTINFO plii);
+    [StructLayout(LayoutKind.Sequential)]
+    struct LASTINPUTINFO {
+        public uint cbSize;
+        public uint dwTime;
+    }
+    public static int Get() {
+        LASTINPUTINFO lii = new LASTINPUTINFO();
+        lii.cbSize = (uint)Marshal.SizeOf(lii);
+        GetLastInputInfo(ref lii);
+        return (int)(Environment.TickCount - (int)lii.dwTime);
+    }
+}
+"@
+Write-Output ([IdleTime]::Get())
+        `.trim());
+      }
+      const result = execSync(
+        `powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "${_idleScriptPath}"`,
+        { timeout: 3000, windowsHide: true }
+      ).toString().trim();
+      return parseInt(result, 10) || 0;
+    } catch(e) { return 0; } // On error, assume not idle (safe default)
+  }
+  if (process.platform === 'darwin') {
+    try {
+      const result = execSync('ioreg -c IOHIDSystem | awk \'/HIDIdleTime/ {print int($NF/1000000000); exit}\'',
+        { timeout: 3000 }).toString().trim();
+      return (parseInt(result, 10) || 0) * 1000; // convert seconds to ms
+    } catch(e) { return 0; }
+  }
+  return 0;
+}
+
+// Track whether user is currently system-idle (no keyboard/mouse input)
+let _userIsSystemIdle = false;
+
 const BROWSER_PROCESSES = ['brave','chrome','firefox','safari','edge','opera','vivaldi'];
 
 function isBrowserProcess(name) {
@@ -1160,6 +1240,38 @@ function tick() {
       return;
     }
     lastTickTime = now;
+
+    // ── OS-level user idle detection ────────────────────────────────────────
+    // Check whether the user has actually touched keyboard/mouse recently.
+    // This catches the "laptop charging overnight, screen on, browser open"
+    // scenario where extension heartbeats keep browser activity alive but
+    // the user is actually asleep/away.
+    const systemIdleMs = getSystemIdleMs();
+    if (systemIdleMs > IDLE_MS) {
+      if (!_userIsSystemIdle) {
+        _userIsSystemIdle = true;
+        // User just went idle — end all open activities at (now - idleMs) so
+        // we don't count the idle period as active time
+        const idleStart = now - systemIdleMs;
+        if (currentActivity) {
+          db.run(`UPDATE activity SET ended_at=? WHERE id=?`, [idleStart, currentActivity.id]);
+          currentActivity = null;
+        }
+        if (currentBrowserActivity) {
+          db.run(`UPDATE activity SET ended_at=? WHERE id=?`, [idleStart, currentBrowserActivity.id]);
+          currentBrowserActivity = null;
+          browserWindowFocused = false;
+        }
+        endAllBackgroundSessions(idleStart);
+        saveDB();
+      }
+      // Don't track anything while system-idle
+      return;
+    } else if (_userIsSystemIdle) {
+      // User just came back from idle — reset state
+      _userIsSystemIdle = false;
+      lastActiveTime = now;
+    }
 
     const win = getActiveWindow();
     if (!win) return;
@@ -1387,6 +1499,21 @@ ipcMain.handle('get-day-rows', (_, offset = 0) => {
 });
 ipcMain.handle('get-ws-port', () => WS_PORT);
 
+// ── Extension connection status (real-time) ──────────────────────────────────
+ipcMain.handle('get-extension-status', () => {
+  const now = Date.now();
+  const connected = _extensionClientCount > 0;
+  // Consider "stale" if connected but no message in 2 minutes
+  const stale = connected && _extensionLastMessage && (now - _extensionLastMessage > 120000);
+  return {
+    connected: connected && !stale,
+    stale,
+    clients: _extensionClientCount,
+    connectedSince: _extensionConnectedSince,
+    lastMessage: _extensionLastMessage,
+  };
+});
+
 ipcMain.handle('get-auto-start', () => {
   return app.getLoginItemSettings().openAtLogin;
 });
@@ -1588,6 +1715,141 @@ ipcMain.handle('trigger-summary', () => {
   lastSummaryDate = saved; // restore so real schedule isn't broken
 });
 
+// ── AI Daily Summary: build detailed activity data for renderer ──────────────
+ipcMain.handle('get-daily-summary-data', (_, offsetDays = 0) => {
+  if (!db) return null;
+  const target = new Date();
+  target.setDate(target.getDate() + offsetDays);
+  target.setHours(0, 0, 0, 0);
+  const dayStart = target.getTime();
+  const dayEnd = Math.min(dayStart + 86400000, Date.now());
+
+  const rawRows = db.exec(`
+    SELECT app_name, window_title, url, started_at,
+           COALESCE(ended_at, ${Date.now()}) AS ended_at,
+           COALESCE(is_background, 0) AS is_background
+    FROM activity
+    WHERE COALESCE(ended_at, ${Date.now()}) > ${dayStart}
+      AND started_at < ${dayEnd}
+    ORDER BY started_at ASC`);
+
+  if (!rawRows.length || !rawRows[0].values.length) return null;
+
+  const activities = [];
+  const appTotals = {};
+  const catTotals = {};
+  const hourBuckets = {};
+  let totalMs = 0;
+  let productiveMs = 0;
+
+  for (const v of rawRows[0].values) {
+    const obj = Object.fromEntries(rawRows[0].columns.map((c, i) => [c, v[i]]));
+    const s = Math.max(obj.started_at, dayStart);
+    const e = Math.min(obj.ended_at, dayEnd);
+    const dur = Math.max(0, e - s);
+    if (dur < 1000) continue; // skip sub-1s noise
+
+    const cat = guessCategory(obj.app_name, obj.window_title);
+    const hour = new Date(s).getHours();
+
+    activities.push({
+      app: obj.app_name,
+      title: obj.window_title || '',
+      url: obj.url || '',
+      start: s,
+      end: e,
+      duration: dur,
+      category: cat.category,
+      productive: cat.productive,
+      isBackground: !!obj.is_background,
+      hour,
+    });
+
+    // Aggregate per app
+    if (!appTotals[obj.app_name]) {
+      appTotals[obj.app_name] = { ms: 0, category: cat.category, productive: cat.productive, titles: new Set() };
+    }
+    appTotals[obj.app_name].ms += dur;
+    if (obj.window_title) appTotals[obj.app_name].titles.add(obj.window_title);
+
+    // Aggregate per category
+    catTotals[cat.category] = (catTotals[cat.category] || 0) + dur;
+
+    // Aggregate per hour
+    hourBuckets[hour] = (hourBuckets[hour] || 0) + dur;
+
+    totalMs += dur;
+    if (cat.productive) productiveMs += dur;
+  }
+
+  // Convert Sets to arrays for JSON serialization
+  const topApps = Object.entries(appTotals)
+    .sort((a, b) => b[1].ms - a[1].ms)
+    .slice(0, 15)
+    .map(([app, data]) => ({
+      app,
+      ms: data.ms,
+      category: data.category,
+      productive: data.productive,
+      titles: [...data.titles].slice(0, 5),
+    }));
+
+  // Find peak hour
+  const peakHour = Object.entries(hourBuckets)
+    .sort((a, b) => b[1] - a[1])[0];
+
+  // Build time blocks (consecutive periods of same-category work)
+  // For time log: we also track individual titles within each block
+  const timeBlocks = [];
+  let currentBlock = null;
+  for (const act of activities) {
+    if (act.isBackground) continue;
+    if (currentBlock && currentBlock.category === act.category &&
+        act.start - currentBlock.end < 300000) { // 5min gap tolerance
+      currentBlock.end = act.end;
+      currentBlock.duration += act.duration;
+      currentBlock.apps.add(act.app);
+      if (act.title) currentBlock.titles.add(act.title);
+    } else {
+      if (currentBlock) {
+        currentBlock.apps = [...currentBlock.apps];
+        currentBlock.titles = [...currentBlock.titles].slice(0, 8);
+        timeBlocks.push(currentBlock);
+      }
+      currentBlock = {
+        category: act.category,
+        start: act.start,
+        end: act.end,
+        duration: act.duration,
+        apps: new Set([act.app]),
+        titles: new Set(act.title ? [act.title] : []),
+      };
+    }
+  }
+  if (currentBlock) {
+    currentBlock.apps = [...currentBlock.apps];
+    currentBlock.titles = [...currentBlock.titles].slice(0, 8);
+    timeBlocks.push(currentBlock);
+  }
+
+  const score = totalMs > 0 ? Math.round((productiveMs / totalMs) * 100) : 0;
+  const dateStr = target.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' });
+
+  return {
+    date: dateStr,
+    totalMs,
+    productiveMs,
+    score,
+    topApps,
+    catTotals,
+    hourBuckets,
+    peakHour: peakHour ? { hour: parseInt(peakHour[0]), ms: peakHour[1] } : null,
+    timeBlocks: timeBlocks.slice(0, 60), // enough for a full workday time log
+    appCount: Object.keys(appTotals).length,
+    activityCount: activities.length,
+  };
+});
+
 ipcMain.handle('get-summary-time', () => {
   const now    = new Date();
   const target = new Date();
@@ -1692,6 +1954,15 @@ function onSystemResume() {
 }
 
 app.whenReady().then(async () => {
+  // FIX 4: If another instance tries to launch, focus the existing window
+  app.on('second-instance', () => {
+    if (mainWindow) {
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      mainWindow.show();
+      mainWindow.focus();
+    }
+  });
+
   // Hook OS-level power/lock events
   powerMonitor.on('lock-screen',   onSystemIdle);
   powerMonitor.on('suspend',       onSystemIdle);
