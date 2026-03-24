@@ -1377,11 +1377,11 @@ updateExtensionStatus();
 setInterval(updateExtensionStatus, 10000);
 
 // ── AI Settings UI ──────────────────────────────────────────────────────────
-let _aiSettings = { provider: 'none', apiKey: '' };
+let _aiSettings = { provider: 'none', hasKey: false };
 let _puterLoaded = false;
 
 async function loadAISettings() {
-  try { _aiSettings = await window.daylens.getAISettings(); } catch(e) { _aiSettings = { provider: 'none', apiKey: '' }; }
+  try { _aiSettings = await window.daylens.getAISettings(); } catch(e) { _aiSettings = { provider: 'none', hasKey: false }; }
 }
 
 async function initAISettingsUI() {
@@ -1389,7 +1389,7 @@ async function initAISettingsUI() {
   const radios = document.querySelectorAll('input[name="ai-provider"]');
   radios.forEach(r => { r.checked = (r.value === _aiSettings.provider); });
   updateAIKeyVisibility(_aiSettings.provider);
-  if (_aiSettings.apiKey) document.getElementById('ai-key-input').value = '••••••••';
+  if (_aiSettings.hasKey) document.getElementById('ai-key-input').value = '••••••••';
 }
 
 function updateAIKeyVisibility(provider) {
@@ -1414,7 +1414,7 @@ async function saveAIKey() {
   const input = document.getElementById('ai-key-input');
   const key = input.value.trim();
   if (!key || key === '••••••••') return;
-  _aiSettings.apiKey = key;
+  _aiSettings.hasKey = true;
   await window.daylens.setAISettings(_aiSettings.provider, key);
   const saved = document.getElementById('ai-key-saved');
   saved.style.display = 'block';
@@ -1528,27 +1528,25 @@ async function loadSummary() {
 }
 
 async function callAIProvider(prompt) {
-  const { provider, apiKey } = _aiSettings;
-  if (provider === 'puter') {
+  // All API-key providers (Gemini, OpenAI) are called from the main process
+  // via IPC so the key never enters renderer memory.
+  // Only Puter.js runs client-side (no key needed — it uses its own auth).
+  const result = await window.daylens.callAI(prompt);
+
+  if (result.usePuter) {
+    // Puter.js must run in the renderer (browser context) — no API key involved
     await ensurePuterLoaded();
     const r = await puter.ai.chat(prompt, { model: 'gpt-4o-mini' });
     if (typeof r === 'string') return r;
-    if (r?.message?.content) { const c = r.message.content; return typeof c === 'string' ? c : Array.isArray(c) ? c.map(x => x.text||'').join('') : String(c); }
+    if (r?.message?.content) {
+      const c = r.message.content;
+      return typeof c === 'string' ? c : Array.isArray(c) ? c.map(x => x.text||'').join('') : String(c);
+    }
     return String(r);
   }
-  if (provider === 'gemini') {
-    if (!apiKey) throw new Error('No Gemini key');
-    const r = await fetch('https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key='+apiKey, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({contents:[{parts:[{text:prompt}]}]}) });
-    if (!r.ok) throw new Error('Gemini '+r.status);
-    const d = await r.json(); return d?.candidates?.[0]?.content?.parts?.[0]?.text||'';
-  }
-  if (provider === 'openai') {
-    if (!apiKey) throw new Error('No OpenAI key');
-    const r = await fetch('https://api.openai.com/v1/chat/completions', { method:'POST', headers:{'Content-Type':'application/json','Authorization':'Bearer '+apiKey}, body:JSON.stringify({model:'gpt-4o-mini',max_tokens:1500,messages:[{role:'user',content:prompt}]}) });
-    if (!r.ok) throw new Error('OpenAI '+r.status);
-    const d = await r.json(); return d?.choices?.[0]?.message?.content||'';
-  }
-  throw new Error('No AI provider');
+
+  if (result.error) throw new Error(result.error);
+  return result.text || '';
 }
 
 function buildSummaryPrompt(data) {

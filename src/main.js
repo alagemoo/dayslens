@@ -225,12 +225,27 @@ async function initDB() {
   saveDB();
 }
 
+let _saveDBFailCount = 0;
 function saveDB() {
   if (!db) return;
   try {
     fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
     fs.writeFileSync(DB_PATH, Buffer.from(db.export()));
-  } catch (e) {}
+    _saveDBFailCount = 0; // reset on success
+  } catch (e) {
+    _saveDBFailCount++;
+    console.error(`[DayLens] saveDB failed (attempt ${_saveDBFailCount}):`, e.message);
+    // After 5 consecutive failures, warn the user via notification
+    if (_saveDBFailCount === 5 && mainWindow) {
+      try {
+        const { Notification } = require('electron');
+        new Notification({
+          title: '⚠️ DayLens — Database Warning',
+          body: 'Failed to save activity data. Check disk space and permissions.',
+        }).show();
+      } catch(ne) {}
+    }
+  }
 }
 
 setInterval(saveDB, 30000);
@@ -250,9 +265,17 @@ function startWebSocketServer() {
   wsServer = http.createServer();
 
   wsServer.on('upgrade', (req, socket) => {
-    // Only allow from localhost
+    // SECURITY: Only allow connections from browser extensions on localhost
     const origin = req.headers['origin'] || '';
-    if (!origin.startsWith('chrome-extension://') && origin !== '') {
+    // Reject empty origin — a legitimate browser extension always sends one
+    if (!origin.startsWith('chrome-extension://') &&
+        !origin.startsWith('moz-extension://')) {
+      socket.destroy();
+      return;
+    }
+    // Also verify the connection is actually from localhost
+    const remoteAddr = socket.remoteAddress || '';
+    if (remoteAddr !== '127.0.0.1' && remoteAddr !== '::1' && remoteAddr !== '::ffff:127.0.0.1') {
       socket.destroy();
       return;
     }
@@ -418,10 +441,38 @@ function endAllBackgroundSessions(now) {
   for (const [url] of backgroundAudioSessions) endBackgroundSession(url, now);
 }
 
+// ── Rate limiting for WebSocket messages ─────────────────────────────────────
+let _wsMessageCount = 0;
+let _wsRateLimitReset = Date.now();
+const WS_MAX_MESSAGES_PER_SEC = 15;
+
 function handleBrowserEvent(data) {
   if (!db) return;
-  const { type, url, title, domain } = data;
+
+  // Rate limiting: max 15 messages/second
   const now = Date.now();
+  if (now - _wsRateLimitReset > 1000) { _wsMessageCount = 0; _wsRateLimitReset = now; }
+  _wsMessageCount++;
+  if (_wsMessageCount > WS_MAX_MESSAGES_PER_SEC) return;
+
+  // Input validation
+  if (!data || typeof data !== 'object') return;
+  const VALID_TYPES = ['tab_active','tab_updated','tab_hidden','browser_hidden',
+    'window_focused','window_blurred','heartbeat','background_audio','background_audio_end'];
+  let { type, url, title, domain } = data;
+  if (!type || typeof type !== 'string' || !VALID_TYPES.includes(type)) return;
+
+  // Sanitize string inputs — truncate and strip control chars
+  const cleanStr = (s, max) => {
+    if (!s || typeof s !== 'string') return s;
+    return s.substring(0, max).replace(/[\x00-\x1f]/g, '');
+  };
+  url    = cleanStr(url, 2000);
+  title  = cleanStr(title, 500);
+  domain = cleanStr(domain, 200);
+
+  // Use sanitized values from here on
+  const _url = url, _title = title, _domain = domain;
 
   // Track whether the browser window itself is focused
   if (type === 'window_focused')   { browserWindowFocused = true;  return; }
@@ -514,7 +565,7 @@ function handleBrowserEvent(data) {
 // ── Active window (Windows via PowerShell temp file) ──────────────────────────
 function getActiveWindowWin32() {
   try {
-    const tmpScript = path.join(app.getPath('temp'), 'daylens_win.ps1');
+    const tmpScript = path.join(userDataPath, 'daylens_win.ps1');
     if (!fs.existsSync(tmpScript)) {
       fs.writeFileSync(tmpScript, `
 $h = (Add-Type -MemberDefinition '[DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow(); [DllImport("user32.dll")] public static extern int GetWindowText(IntPtr h, System.Text.StringBuilder t, int c); [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h, out uint p);' -Name WinAPI -PassThru)
@@ -1094,7 +1145,7 @@ function getSystemIdleMs() {
   if (process.platform === 'win32') {
     try {
       if (!_idleScriptPath) {
-        _idleScriptPath = path.join(app.getPath('temp'), 'daylens_idle.ps1');
+        _idleScriptPath = path.join(userDataPath, 'daylens_idle.ps1');
         fs.writeFileSync(_idleScriptPath, `
 Add-Type @"
 using System;
@@ -1515,23 +1566,110 @@ ipcMain.handle('get-extension-status', () => {
 });
 
 // ── AI Settings (stored in app_state) ────────────────────────────────────────
+// SECURITY: API key NEVER leaves the main process. Renderer only gets provider name.
 ipcMain.handle('get-ai-settings', () => {
-  if (!db) return { provider: 'none', apiKey: '' };
+  if (!db) return { provider: 'none', hasKey: false };
   try {
     const rows = db.exec("SELECT key, value FROM app_state WHERE key IN ('ai_provider','ai_api_key')");
     const map = {};
     if (rows.length) for (const [k, v] of rows[0].values) map[k] = v;
-    return { provider: map['ai_provider'] || 'none', apiKey: map['ai_api_key'] || '' };
-  } catch(e) { return { provider: 'none', apiKey: '' }; }
+    return {
+      provider: map['ai_provider'] || 'none',
+      hasKey: !!(map['ai_api_key'] && map['ai_api_key'].length > 0), // boolean only, never the key itself
+    };
+  } catch(e) { return { provider: 'none', hasKey: false }; }
 });
 
 ipcMain.handle('set-ai-settings', (_, provider, apiKey) => {
   if (!db) return false;
-  db.run("INSERT OR REPLACE INTO app_state (key, value) VALUES ('ai_provider', ?)", [provider || 'none']);
-  if (apiKey !== undefined) db.run("INSERT OR REPLACE INTO app_state (key, value) VALUES ('ai_api_key', ?)", [apiKey || '']);
+  // Validate provider against whitelist
+  const VALID_PROVIDERS = ['none', 'puter', 'gemini', 'openai'];
+  if (!VALID_PROVIDERS.includes(provider)) provider = 'none';
+  db.run("INSERT OR REPLACE INTO app_state (key, value) VALUES ('ai_provider', ?)", [provider]);
+  if (apiKey !== undefined && typeof apiKey === 'string') {
+    db.run("INSERT OR REPLACE INTO app_state (key, value) VALUES ('ai_api_key', ?)", [apiKey.trim()]);
+  }
   saveDB();
   return true;
 });
+
+// ── AI Call Handler (main process) ───────────────────────────────────────────
+// Renderer sends prompt, main process adds the API key and makes the call.
+// API key never crosses the IPC boundary.
+ipcMain.handle('call-ai', async (_, prompt) => {
+  if (!db || !prompt || typeof prompt !== 'string') return { error: 'Invalid request' };
+  if (prompt.length > 50000) return { error: 'Prompt too large' };
+
+  let provider = 'none', apiKey = '';
+  try {
+    const rows = db.exec("SELECT key, value FROM app_state WHERE key IN ('ai_provider','ai_api_key')");
+    const map = {};
+    if (rows.length) for (const [k, v] of rows[0].values) map[k] = v;
+    provider = map['ai_provider'] || 'none';
+    apiKey = map['ai_api_key'] || '';
+  } catch(e) { return { error: 'Could not read settings' }; }
+
+  if (provider === 'none') return { error: 'No AI provider configured' };
+  if (provider === 'puter') return { text: null, usePuter: true }; // Puter runs client-side, signal renderer
+
+  const https = require('https');
+  const http = require('http');
+
+  try {
+    if (provider === 'gemini') {
+      if (!apiKey) return { error: 'Gemini API key not set' };
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${encodeURIComponent(apiKey)}`;
+      const body = JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] });
+      const resp = await nodeFetch(url, 'POST', { 'Content-Type': 'application/json' }, body);
+      if (resp.error) return { error: `Gemini: ${resp.error}` };
+      const data = JSON.parse(resp.body);
+      return { text: data?.candidates?.[0]?.content?.parts?.[0]?.text || '' };
+    }
+
+    if (provider === 'openai') {
+      if (!apiKey) return { error: 'OpenAI API key not set' };
+      const body = JSON.stringify({ model: 'gpt-4o-mini', max_tokens: 1500, messages: [{ role: 'user', content: prompt }] });
+      const resp = await nodeFetch('https://api.openai.com/v1/chat/completions', 'POST', {
+        'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}`
+      }, body);
+      if (resp.error) return { error: `OpenAI: ${resp.error}` };
+      const data = JSON.parse(resp.body);
+      return { text: data?.choices?.[0]?.message?.content || '' };
+    }
+
+    return { error: 'Unknown provider' };
+  } catch(e) {
+    return { error: e.message || 'AI call failed' };
+  }
+});
+
+// Simple HTTPS fetch for main process (no npm dependency needed)
+function nodeFetch(url, method, headers, body) {
+  return new Promise((resolve) => {
+    const lib = url.startsWith('https') ? require('https') : require('http');
+    const parsed = new URL(url);
+    const opts = {
+      hostname: parsed.hostname,
+      port: parsed.port || (parsed.protocol === 'https:' ? 443 : 80),
+      path: parsed.pathname + parsed.search,
+      method: method || 'GET',
+      headers: { ...headers, 'Content-Length': Buffer.byteLength(body || '') },
+      timeout: 30000,
+    };
+    const req = lib.request(opts, (res) => {
+      let data = '';
+      res.on('data', chunk => { data += chunk; if (data.length > 500000) req.destroy(); });
+      res.on('end', () => {
+        if (res.statusCode >= 200 && res.statusCode < 300) resolve({ body: data });
+        else resolve({ error: `HTTP ${res.statusCode}` });
+      });
+    });
+    req.on('error', (e) => resolve({ error: e.message }));
+    req.on('timeout', () => { req.destroy(); resolve({ error: 'Timeout' }); });
+    if (body) req.write(body);
+    req.end();
+  });
+}
 
 ipcMain.handle('get-auto-start', () => {
   return app.getLoginItemSettings().openAtLogin;
@@ -1895,7 +2033,7 @@ ipcMain.handle('export-pdf', async (_, { html, filename }) => {
   // Create a hidden BrowserWindow to render the HTML and print to PDF
   const pdfWin = new BrowserWindow({
     show: false,
-    webPreferences: { nodeIntegration: false, contextIsolation: true },
+    webPreferences: { nodeIntegration: false, contextIsolation: true, sandbox: true },
   });
 
   await pdfWin.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(html));
@@ -1930,25 +2068,22 @@ ipcMain.handle('open-extension-folder', () => {
 });
 
 ipcMain.handle('open-browser-extensions', (_, browser) => {
-  const urls = {
-    brave:   'brave://extensions',
-    chrome:  'chrome://extensions',
-    edge:    'edge://extensions',
-  };
-  // shell.openExternal can't open chrome:// URLs directly — open via cmd
-  const url = urls[browser] || urls.chrome;
-  const { execSync } = require('child_process');
+  // SECURITY: Whitelist browser values to prevent command injection
+  const ALLOWED = { brave: 'brave', chrome: 'chrome', edge: 'edge' };
+  const safeBrowser = ALLOWED[browser];
+  if (!safeBrowser) return false;
+
+  const urls = { brave: 'brave://extensions', chrome: 'chrome://extensions', edge: 'edge://extensions' };
+  const cmds = { brave: 'start brave', chrome: 'start chrome', edge: 'start msedge' };
+  const url = urls[safeBrowser];
   try {
-    if (browser === 'brave') {
-      execSync(`start brave "${url}"`, { windowsHide: true });
-    } else if (browser === 'edge') {
-      execSync(`start msedge "${url}"`, { windowsHide: true });
-    } else {
-      execSync(`start chrome "${url}"`, { windowsHide: true });
-    }
+    execSync(`${cmds[safeBrowser]} "${url}"`, { windowsHide: true, timeout: 5000 });
   } catch(e) {
-    // fallback - just open folder
-    shell.openPath(urls.brave ? path.join(process.resourcesPath, 'extension') : '');
+    // fallback - open extension folder
+    const extPath = app.isPackaged
+      ? path.join(process.resourcesPath, 'extension')
+      : path.join(__dirname, '../assets/extension');
+    shell.openPath(extPath);
   }
   return true;
 });

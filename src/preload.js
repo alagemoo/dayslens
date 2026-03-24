@@ -23,4 +23,5 @@ contextBridge.exposeInMainWorld('daylens', {
   getDailySummaryData:  (offset)                    => ipcRenderer.invoke('get-daily-summary-data', offset),
   getAISettings:        ()                          => ipcRenderer.invoke('get-ai-settings'),
   setAISettings:        (provider, apiKey)           => ipcRenderer.invoke('set-ai-settings', provider, apiKey),
+  callAI:               (prompt)                     => ipcRenderer.invoke('call-ai', prompt),
 });

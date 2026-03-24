@@ -11,8 +11,7 @@
     "windows"
   ],
   "host_permissions": [
-    "ws://127.0.0.1:43821/*",
-    "<all_urls>"
+    "ws://127.0.0.1:43821/*"
   ],
   "background": {
     "service_worker": "background.js"
