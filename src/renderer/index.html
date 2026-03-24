@@ -6,7 +6,6 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
-<script src="https://js.puter.com/v2/"></script>
 <style>
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
 :root{--r:14px;--r-sm:9px;--r-xs:6px;--transition:0.22s cubic-bezier(0.4,0,0.2,1)}
@@ -337,6 +336,16 @@ html,body{width:100%;height:100%;overflow:hidden;background:var(--bg);color:var(
 .timelog-cat-pill{font-size:9.5px;padding:2px 9px;border-radius:12px;font-weight:600;white-space:nowrap;display:inline-block}
 .timelog-dur{font-family:'JetBrains Mono',monospace;font-size:12px;color:var(--muted);text-align:right;white-space:nowrap;font-weight:500;width:60px}
 .timelog-total-row td{padding:12px 10px;border-top:2px solid var(--border2);border-bottom:none}
+/* AI Provider settings */
+.ai-provider-option{display:flex;align-items:flex-start;gap:9px;padding:8px 10px;border-radius:var(--r-xs);border:1px solid var(--border);cursor:pointer;transition:all 0.15s}
+.ai-provider-option:hover{border-color:var(--border2);background:var(--surface2)}
+.ai-provider-option:has(input:checked){border-color:rgba(91,156,246,0.3);background:rgba(91,156,246,0.05)}
+.ai-provider-option input{display:none}
+.ai-prov-radio{width:14px;height:14px;border-radius:50%;border:2px solid var(--muted);flex-shrink:0;margin-top:2px;transition:all 0.15s;position:relative}
+.ai-provider-option:has(input:checked) .ai-prov-radio{border-color:var(--accent)}
+.ai-provider-option:has(input:checked) .ai-prov-radio::after{content:'';position:absolute;top:2px;left:2px;width:6px;height:6px;border-radius:50%;background:var(--accent)}
+.ai-prov-name{font-size:12px;font-weight:600;color:var(--text2)}
+.ai-prov-desc{font-size:10px;color:var(--muted);margin-top:1px}
 .summary-header-row{display:flex;align-items:center;justify-content:space-between;margin-bottom:4px}
 .summary-badge{font-size:10px;padding:3px 10px;border-radius:20px;font-weight:600;background:var(--glow);color:var(--accent);border:1px solid rgba(91,156,246,0.2)}
 </style>
@@ -609,6 +618,27 @@ html,body{width:100%;height:100%;overflow:hidden;background:var(--bg);color:var(
       </div>
     </div>
     <div>
+      <div class="settings-section-title">🧠 AI for Day Summary</div>
+      <div class="settings-block">
+        <div style="font-size:11px;color:var(--muted);line-height:1.6;margin-bottom:8px">Choose an AI provider to enhance your Day Summary with intelligent task descriptions. Without AI, DayLens generates smart local descriptions — no internet needed.</div>
+        <div style="display:flex;flex-direction:column;gap:6px" id="ai-provider-options">
+          <label class="ai-provider-option"><input type="radio" name="ai-provider" value="none" onchange="setAIProvider('none')"><span class="ai-prov-radio"></span><div><div class="ai-prov-name">None — Local only</div><div class="ai-prov-desc">Smart local inference, no API needed</div></div></label>
+          <label class="ai-provider-option"><input type="radio" name="ai-provider" value="puter" onchange="setAIProvider('puter')"><span class="ai-prov-radio"></span><div><div class="ai-prov-name">Puter.js — Free AI</div><div class="ai-prov-desc">GPT-4o-mini via Puter, no API key required</div></div></label>
+          <label class="ai-provider-option"><input type="radio" name="ai-provider" value="gemini" onchange="setAIProvider('gemini')"><span class="ai-prov-radio"></span><div><div class="ai-prov-name">Google Gemini</div><div class="ai-prov-desc">Gemini Flash — free tier available</div></div></label>
+          <label class="ai-provider-option"><input type="radio" name="ai-provider" value="openai" onchange="setAIProvider('openai')"><span class="ai-prov-radio"></span><div><div class="ai-prov-name">OpenAI</div><div class="ai-prov-desc">GPT-4o-mini or any OpenAI model</div></div></label>
+        </div>
+        <div id="ai-key-section" style="display:none;margin-top:10px">
+          <div style="font-size:10.5px;color:var(--muted);margin-bottom:5px" id="ai-key-label">API Key</div>
+          <div style="display:flex;gap:6px">
+            <input type="password" id="ai-key-input" placeholder="Paste your API key…" style="flex:1;background:var(--surface3);border:1px solid var(--border2);border-radius:var(--r-xs);padding:7px 10px;color:var(--text);font-size:12px;font-family:inherit;outline:none">
+            <button class="settings-btn primary" onclick="saveAIKey()">Save</button>
+          </div>
+          <div style="font-size:10px;color:var(--muted);margin-top:5px">Stored locally on your device. Never sent anywhere except the provider's API.</div>
+          <div id="ai-key-saved" style="display:none;font-size:11px;color:var(--green);margin-top:5px">✓ Key saved</div>
+        </div>
+      </div>
+    </div>
+    <div>
       <div class="settings-section-title">System</div>
       <div class="settings-block">
         <div class="settings-row">
@@ -644,6 +674,7 @@ function openSettings(){
   document.getElementById('settings-panel').classList.add('open');
   initExtCard();
   initAutoStartToggle();
+  initAISettingsUI();
 }
 
 async function initAutoStartToggle(){
@@ -1345,6 +1376,120 @@ async function updateExtensionStatus() {
 updateExtensionStatus();
 setInterval(updateExtensionStatus, 10000);
 
+// ── AI Settings UI ──────────────────────────────────────────────────────────
+let _aiSettings = { provider: 'none', apiKey: '' };
+let _puterLoaded = false;
+
+async function loadAISettings() {
+  try { _aiSettings = await window.daylens.getAISettings(); } catch(e) { _aiSettings = { provider: 'none', apiKey: '' }; }
+}
+
+async function initAISettingsUI() {
+  await loadAISettings();
+  const radios = document.querySelectorAll('input[name="ai-provider"]');
+  radios.forEach(r => { r.checked = (r.value === _aiSettings.provider); });
+  updateAIKeyVisibility(_aiSettings.provider);
+  if (_aiSettings.apiKey) document.getElementById('ai-key-input').value = '••••••••';
+}
+
+function updateAIKeyVisibility(provider) {
+  const section = document.getElementById('ai-key-section');
+  const label = document.getElementById('ai-key-label');
+  if (provider === 'gemini' || provider === 'openai') {
+    section.style.display = 'block';
+    label.textContent = provider === 'gemini' ? 'Gemini API Key' : 'OpenAI API Key';
+  } else {
+    section.style.display = 'none';
+  }
+}
+
+async function setAIProvider(provider) {
+  _aiSettings.provider = provider;
+  updateAIKeyVisibility(provider);
+  await window.daylens.setAISettings(provider, undefined);
+  if (provider === 'puter') ensurePuterLoaded();
+}
+
+async function saveAIKey() {
+  const input = document.getElementById('ai-key-input');
+  const key = input.value.trim();
+  if (!key || key === '••••••••') return;
+  _aiSettings.apiKey = key;
+  await window.daylens.setAISettings(_aiSettings.provider, key);
+  const saved = document.getElementById('ai-key-saved');
+  saved.style.display = 'block';
+  input.value = '••••••••';
+  setTimeout(() => { saved.style.display = 'none'; }, 3000);
+}
+
+function ensurePuterLoaded() {
+  if (_puterLoaded || typeof puter !== 'undefined') { _puterLoaded = true; return Promise.resolve(); }
+  return new Promise((resolve, reject) => {
+    const s = document.createElement('script');
+    s.src = 'https://js.puter.com/v2/';
+    s.onload = () => { _puterLoaded = true; resolve(); };
+    s.onerror = () => reject(new Error('Failed to load Puter.js'));
+    document.head.appendChild(s);
+  });
+}
+
+// ── Smart Local Inference Engine ────────────────────────────────────────────
+function inferTaskDescription(apps, category, titles, duration) {
+  const a = apps.map(x => x.toLowerCase());
+  const t = (titles || []).join(' ').toLowerCase();
+  const allTitles = (titles || []);
+  const bestTitle = allTitles.length ? allTitles[0].replace(/\(\d+\)\s*/g, '').replace(/ [-–|].*?(YouTube|Brave|Chrome|Google|Reddit|LinkedIn|Mozilla|Firefox|Edge).*$/i, '').trim().substring(0, 60) : '';
+
+  if (a.some(x => ['code','vscode','visual studio code','sublime text','cursor','vim','neovim','webstorm','atom','notepad++'].some(k => x.includes(k)))) {
+    if (t.includes('.py') || t.includes('python')) return 'Software development — Python';
+    if (t.includes('.js') || t.includes('.ts') || t.includes('react') || t.includes('node')) return 'Software development — JavaScript/TypeScript';
+    if (t.includes('.dart') || t.includes('flutter')) return 'Software development — Flutter/Dart';
+    if (t.includes('.html') || t.includes('.css')) return 'Frontend development — HTML/CSS';
+    if (bestTitle) return 'Software development — ' + bestTitle;
+    return 'Software development & coding';
+  }
+  if (a.some(x => ['claude.ai','chatgpt.com','chat.openai.com','gemini.google.com','perplexity.ai','copilot','poe.com','phind.com'].some(k => x.includes(k)))) return 'AI-assisted research & development';
+  if (a.some(x => x.includes('github.com'))) {
+    if (t.includes('pull request') || t.includes('pr #')) return 'Code review — pull requests';
+    if (t.includes('issues') || t.includes('bug')) return 'Issue tracking & bug management';
+    return 'Code repository & version control';
+  }
+  if (a.some(x => x.includes('stackoverflow') || x.includes('stackexchange'))) return 'Technical research & debugging';
+  if (a.some(x => /^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}/.test(x) || ['localhost','cpanel','plesk','webmin','whm'].some(k => x.includes(k)))) return 'Server administration & deployment';
+  if (a.some(x => ['figma','canva','inkscape','photoshop','illustrator','sketch','xd'].some(k => x.includes(k)))) return 'Design & visual assets';
+  if (a.some(x => x.includes('obs'))) return 'Screen recording & content production';
+  if (a.some(x => ['word','winword','excel','powerpoint','powerpnt','libreoffice','google docs','notion.so','obsidian'].some(k => x.includes(k)))) {
+    if (a.some(x => x.includes('excel') || x.includes('sheets'))) return 'Data analysis & spreadsheets';
+    return 'Documentation & writing';
+  }
+  if (a.some(x => ['gmail','outlook','slack','teams','zoom','meet.google','discord','telegram','whatsapp'].some(k => x.includes(k)))) {
+    if (a.some(x => x.includes('zoom') || x.includes('meet') || x.includes('teams'))) return 'Video meeting / conference call';
+    return 'Email & team communication';
+  }
+  if (a.some(x => x.includes('youtube'))) {
+    const LEARN = ['tutorial','course','lecture','learn','how to','programming','coding','javascript','python','react','node','flutter','explained','guide','crash course','freecodecamp','fireship','cs50'];
+    if (LEARN.some(k => t.includes(k))) return 'Technical learning — ' + (bestTitle || 'video tutorial');
+    if (t.includes('healing stream') || t.includes('sermon') || t.includes('worship') || t.includes('church') || t.includes('pastor')) return 'Personal — religious broadcast';
+    if (t.includes('music') || t.includes('official video') || t.includes('lyrics')) return 'Personal break — music';
+    return 'Personal — video content' + (bestTitle ? ': ' + bestTitle : '');
+  }
+  if (a.some(x => ['udemy','coursera','khanacademy','freecodecamp','edx','pluralsight','skillshare','codecademy'].some(k => x.includes(k)))) return 'Online learning' + (bestTitle ? ' — ' + bestTitle : '');
+  if (a.some(x => x.includes('pcisecurity') || x.includes('compliance'))) return 'PCI compliance research';
+  if (a.some(x => x.includes('notebooklm'))) return 'AI-powered research & note-taking';
+  if (a.some(x => ['twitter','x.com','instagram','facebook','tiktok','reddit','linkedin'].some(k => x.includes(k)))) {
+    if (a.some(x => x.includes('linkedin')) && (t.includes('job') || t.includes('post') || t.includes('article'))) return 'Professional networking — LinkedIn';
+    return 'Personal — social media';
+  }
+  if (a.some(x => ['netflix','spotify','twitch','disney','hbo','vlc','steam'].some(k => x.includes(k)))) return 'Personal break — entertainment';
+  if (a.some(x => x.includes('bibleshow') || x.includes('bible'))) return 'Personal — religious media';
+  if (a.some(x => ['internet download manager','idm'].some(k => x.includes(k)))) return 'File download (background)';
+  if (a.some(x => x.includes('google.com'))) return 'Web research & browsing';
+  if (category === 'Browsing') return bestTitle ? 'Research — ' + bestTitle : 'Web browsing & research';
+  if (category === 'Deep Work') return bestTitle ? 'Focused work — ' + bestTitle : 'Focused work session';
+  if (category === 'System') return 'System & file management';
+  return bestTitle ? bestTitle : apps.join(', ');
+}
+
 // ── AI Day Summary ──────────────────────────────────────────────────────────
 let summaryOffset = 0;
 function summaryPrev() { summaryOffset--; loadSummary(); }
@@ -1354,325 +1499,116 @@ async function loadSummary() {
   const wrap = document.getElementById('summary-wrap');
   const label = document.getElementById('summary-date-label');
   const nextBtn = document.getElementById('summary-next-btn');
-
-  // Update date label
-  const target = new Date();
-  target.setDate(target.getDate() + summaryOffset);
-  target.setHours(0,0,0,0);
+  const target = new Date(); target.setDate(target.getDate() + summaryOffset); target.setHours(0,0,0,0);
   const today = new Date(); today.setHours(0,0,0,0);
   const yesterday = new Date(today); yesterday.setDate(today.getDate() - 1);
   if (target.getTime() === today.getTime()) label.textContent = 'Today';
   else if (target.getTime() === yesterday.getTime()) label.textContent = 'Yesterday';
   else label.textContent = target.toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' });
   nextBtn.disabled = (summaryOffset >= 0);
-
-  // Show loading
-  wrap.innerHTML = `<div class="summary-generating"><div class="summary-spinner"></div><div class="summary-gen-text">Analyzing your day with AI…</div></div>`;
-
+  wrap.innerHTML = '<div class="summary-generating"><div class="summary-spinner"></div><div class="summary-gen-text">Analyzing your day…</div></div>';
   try {
     const data = await window.daylens.getDailySummaryData(summaryOffset);
-    if (!data || data.totalMs < 60000) {
-      wrap.innerHTML = `<div class="summary-no-data"><div style="font-size:28px;margin-bottom:10px;opacity:0.35">🧠</div><div style="font-size:13px;line-height:1.6">No significant activity recorded for this day.<br>Use DayLens throughout the day, then check back here for your AI summary.</div></div>`;
-      return;
-    }
-
-    // First render the local time log immediately (no API needed)
+    if (!data || data.totalMs < 60000) { wrap.innerHTML = '<div class="summary-no-data"><div style="font-size:28px;margin-bottom:10px;opacity:0.35">🧠</div><div style="font-size:13px;line-height:1.6">No significant activity recorded for this day.</div></div>'; return; }
+    await loadAISettings();
     renderTimeLog(wrap, data);
-
-    // Then call AI to generate the narrative + smart task descriptions
-    const prompt = buildSummaryPrompt(data);
-    const aiCard = document.getElementById('ai-narrative-card');
-    if (aiCard) aiCard.innerHTML = `<div class="summary-generating"><div class="summary-spinner"></div><div class="summary-gen-text">Writing your AI analysis via Puter.js…</div></div>`;
-
-    try {
-      const response = await puter.ai.chat(prompt, {
-        model: 'gpt-4o-mini',
-      });
-
-      // puter.ai.chat returns response directly (string or object)
-      let text = '';
-      if (typeof response === 'string') {
-        text = response;
-      } else if (response?.message?.content) {
-        // Some models return { message: { content: ... } }
-        const content = response.message.content;
-        if (typeof content === 'string') text = content;
-        else if (Array.isArray(content)) text = content.map(c => c.text || '').join('');
-        else text = String(content);
-      } else if (response?.text) {
-        text = response.text;
-      } else {
-        text = String(response);
+    if (_aiSettings.provider !== 'none') {
+      const aiCard = document.getElementById('ai-narrative-card');
+      if (aiCard) aiCard.innerHTML = '<div class="summary-generating"><div class="summary-spinner"></div><div class="summary-gen-text">Enhancing with AI (' + _aiSettings.provider + ')…</div></div>';
+      try {
+        const aiText = await callAIProvider(buildSummaryPrompt(data));
+        if (aiText && aiText.length > 20) injectAIEnhancements(data, aiText);
+        else throw new Error('Short response');
+      } catch(aiErr) {
+        console.error('AI error:', aiErr);
+        if (aiCard) aiCard.innerHTML = '<div style="font-size:12px;color:var(--muted);padding:14px;text-align:center;line-height:1.7">AI enhancement unavailable. Showing local analysis. <button class="topbar-btn" style="font-size:11px;padding:3px 10px;margin-left:8px" onclick="loadSummary()">Retry</button> <button class="topbar-btn" style="font-size:11px;padding:3px 10px;margin-left:4px" onclick="openSettings()">Settings</button></div>';
       }
-
-      if (!text || text.length < 20) throw new Error('Empty AI response');
-
-      // Parse AI response and inject into the time log
-      injectAIEnhancements(data, text);
-    } catch(aiErr) {
-      console.error('AI enhancement error:', aiErr);
-      if (aiCard) aiCard.innerHTML = `<div style="font-size:12px;color:var(--muted);padding:12px;text-align:center">⚡ AI analysis unavailable — showing local summary. <button class="topbar-btn" style="font-size:11px;padding:3px 10px;margin-left:8px" onclick="loadSummary()">Retry</button></div>`;
     }
+  } catch(e) { console.error('Summary error:', e); wrap.innerHTML = '<div class="summary-error"><div class="summary-error-icon">⚠️</div><div class="summary-error-text">Could not generate summary.<br><button class="topbar-btn" style="margin-top:12px" onclick="loadSummary()">Try Again</button></div></div>'; }
+}
 
-  } catch(e) {
-    console.error('Summary error:', e);
-    wrap.innerHTML = `<div class="summary-error"><div class="summary-error-icon">⚠️</div><div class="summary-error-text">Could not generate summary.<br><button class="topbar-btn" style="margin-top:12px" onclick="loadSummary()">Try Again</button></div></div>`;
+async function callAIProvider(prompt) {
+  const { provider, apiKey } = _aiSettings;
+  if (provider === 'puter') {
+    await ensurePuterLoaded();
+    const r = await puter.ai.chat(prompt, { model: 'gpt-4o-mini' });
+    if (typeof r === 'string') return r;
+    if (r?.message?.content) { const c = r.message.content; return typeof c === 'string' ? c : Array.isArray(c) ? c.map(x => x.text||'').join('') : String(c); }
+    return String(r);
   }
+  if (provider === 'gemini') {
+    if (!apiKey) throw new Error('No Gemini key');
+    const r = await fetch('https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key='+apiKey, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({contents:[{parts:[{text:prompt}]}]}) });
+    if (!r.ok) throw new Error('Gemini '+r.status);
+    const d = await r.json(); return d?.candidates?.[0]?.content?.parts?.[0]?.text||'';
+  }
+  if (provider === 'openai') {
+    if (!apiKey) throw new Error('No OpenAI key');
+    const r = await fetch('https://api.openai.com/v1/chat/completions', { method:'POST', headers:{'Content-Type':'application/json','Authorization':'Bearer '+apiKey}, body:JSON.stringify({model:'gpt-4o-mini',max_tokens:1500,messages:[{role:'user',content:prompt}]}) });
+    if (!r.ok) throw new Error('OpenAI '+r.status);
+    const d = await r.json(); return d?.choices?.[0]?.message?.content||'';
+  }
+  throw new Error('No AI provider');
 }
 
 function buildSummaryPrompt(data) {
-  const fmtMs = (ms) => {
-    const h = Math.floor(ms / 3600000);
-    const m = Math.floor((ms % 3600000) / 60000);
-    if (h > 0) return `${h}h ${m}m`;
-    return `${m}m`;
-  };
-
-  const blocksStr = data.timeBlocks.map(b => {
-    const startTime = new Date(b.start).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-    const endTime = new Date(b.end).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-    const titles = (b.titles || []).slice(0, 5).map(t =>
-      t.replace(/ [-–|].*?(YouTube|Brave|Chrome|Google|Reddit|LinkedIn|Mozilla|Firefox|Edge|Safari|Opera).*$/i, '')
-       .replace(/\(\d+\)\s*/g, '')
-       .trim().substring(0, 100)
-    ).filter(t => t.length > 2);
-    return `${startTime}–${endTime} | Apps: ${b.apps.join(', ')} | ${b.category} | ${fmtMs(b.duration)}${titles.length ? '\n  Titles: ' + titles.join(' | ') : ''}`;
+  const fm = (ms) => { const h=Math.floor(ms/3600000),m=Math.floor((ms%3600000)/60000); return h>0?h+'h '+m+'m':m+'m'; };
+  const bl = data.timeBlocks.map(b => {
+    const st=new Date(b.start).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}), et=new Date(b.end).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
+    const ti=(b.titles||[]).slice(0,5).map(t=>t.replace(/ [-–|].*?(YouTube|Brave|Chrome|Google|Reddit|LinkedIn|Mozilla|Firefox|Edge|Safari).*$/i,'').replace(/\(\d+\)\s*/g,'').trim().substring(0,100)).filter(t=>t.length>2);
+    return st+'–'+et+' | Apps: '+b.apps.join(', ')+' | '+b.category+' | '+fm(b.duration)+(ti.length?'\n  Titles: '+ti.join(' | '):'');
   }).join('\n');
-
-  const topAppsStr = data.topApps.map(a => {
-    const ct = a.titles.slice(0, 4).map(t =>
-      t.replace(/ [-–|].*?(YouTube|Brave|Chrome|Google|Reddit|LinkedIn|Mozilla|Firefox|Edge).*$/i, '')
-       .replace(/\(\d+\)\s*/g, '').trim().substring(0, 80)
-    ).filter(t => t.length > 2);
-    return `- ${a.app} (${a.category}, ${fmtMs(a.ms)})${ct.length ? ': ' + ct.join('; ') : ''}`;
-  }).join('\n');
-
-  return `You are an intelligent productivity analyst for DayLens, a desktop activity tracker. Transform raw computer activity into a professional daily time log suitable for company submission.
-
-DATE: ${data.date}
-TOTALS: ${fmtMs(data.totalMs)} tracked, ${fmtMs(data.productiveMs)} productive (${data.score}%), ${data.appCount} apps
-
-RAW ACTIVITY BLOCKS (what the computer recorded):
-${blocksStr}
-
-TOP APPS:
-${topAppsStr}
-
-Respond with EXACTLY two sections separated by "---":
-
-SECTION 1 — PROFESSIONAL TIME LOG:
-Convert each block into a professional task description.
-Format: START–END | Task description | Duration
-
-INFERENCE RULES — do NOT just list app names, TRANSLATE into work:
-• VS Code / Code / Sublime / cursor.sh → "Software development" or infer project from titles
-• claude.ai / chatgpt.com / gemini → "AI-assisted research & development"
-• github.com → "Code review & version control"
-• Google Docs / Notion / Word → "Documentation & writing"
-• YouTube + tutorial titles → "Technical learning: [topic from title]"
-• YouTube + entertainment titles → "Personal break — media"
-• gmail / Outlook / Slack → "Email & team communication"
-• stackoverflow.com → "Technical research & debugging"
-• figma / Canva / Inkscape → "Design work"
-• localhost / IP addresses → "Local development & server testing"
-• OBS Studio → "Screen recording / content production"
-• BibleShow / Healing Streams / religious content → "Personal — religious media"
-• Download managers (IDM) → skip or merge into adjacent block
-• Quick switches (<3min) → merge into the dominant activity
-Keep descriptions 5-15 words. Be honest about personal/entertainment time.
-
-SECTION 2 — DAY NARRATIVE (2-3 paragraphs, under 180 words):
-Describe actual work flow. Highlight longest focus block. Note patterns. One specific tip for tomorrow. Use **bold** for key metrics.`;
+  const ta = data.topApps.map(a => { const ct=a.titles.slice(0,4).map(t=>t.replace(/ [-–|].*?(YouTube|Brave|Chrome|Google|Reddit|LinkedIn|Mozilla|Firefox|Edge).*$/i,'').replace(/\(\d+\)\s*/g,'').trim().substring(0,80)).filter(t=>t.length>2); return '- '+a.app+' ('+a.category+', '+fm(a.ms)+')' + (ct.length?': '+ct.join('; '):''); }).join('\n');
+  return 'You are an intelligent productivity analyst for DayLens. Transform raw computer activity into a professional daily time log.\n\nDATE: '+data.date+'\nTOTALS: '+fm(data.totalMs)+' tracked, '+fm(data.productiveMs)+' productive ('+data.score+'%), '+data.appCount+' apps\n\nRAW ACTIVITY BLOCKS:\n'+bl+'\n\nTOP APPS:\n'+ta+'\n\nRespond with EXACTLY two sections separated by "---":\n\nSECTION 1 — PROFESSIONAL TIME LOG:\nOne line per block. Format: START–END | Professional task description | Duration\nINFERENCE RULES (translate apps into work, never just list app names):\n• Code editors → "Software development" + infer language/project from titles\n• AI tools (claude.ai, chatgpt, gemini) → "AI-assisted R&D"\n• github.com → "Code review & version control"\n• YouTube + tutorial keywords → "Technical learning: [topic]"\n• YouTube + entertainment/religious → "Personal — [description]"\n• Gmail/Outlook/Slack → "Email & team communication"\n• Zoom/Meet/Teams → "Video meeting / conference call"\n• Design tools → "Design work"\n• IP addresses/localhost → "Server admin & local dev testing"\n• OBS Studio → "Content production & screen recording"\n• Merge blocks under 3min into neighbors. Be honest about personal time.\n\nSECTION 2 — DAY NARRATIVE (2-3 paragraphs, under 180 words):\nDescribe the day flow. Highlight longest focus block. Note patterns. One actionable tip. Use **bold** for key metrics.';
 }
 
 function renderTimeLog(wrap, data) {
-  const score = data.score;
-  const grade = scoreGrade(score);
-  const catEntries = Object.entries(data.catTotals).sort((a, b) => b[1] - a[1]);
-  const fmtHour = (h) => h === 0 ? '12 AM' : h < 12 ? h + ' AM' : h === 12 ? '12 PM' : (h - 12) + ' PM';
-
-  // Build time log rows from timeBlocks
-  const logRows = data.timeBlocks.filter(b => b.duration >= 60000).map(b => {
-    const startTime = new Date(b.start).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-    const endTime = new Date(b.end).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-    const color = CAT_COLORS[b.category] || '#64748b';
-    // Build a local task description from app names + titles
-    const titles = (b.titles || []).slice(0, 3).map(t =>
-      t.replace(/ [-–|].*?(YouTube|Brave|Chrome|Google|Reddit|LinkedIn|Mozilla|Firefox|Edge).*$/i, '').trim().substring(0, 60)
-    ).filter(Boolean);
-    const localDesc = titles.length
-      ? titles[0] + (titles.length > 1 ? ` (+${titles.length - 1} more)` : '')
-      : b.apps.join(', ');
-
-    return {
-      start: startTime,
-      end: endTime,
-      apps: b.apps,
-      category: b.category,
-      color,
-      duration: b.duration,
-      localDesc,
-      aiDesc: null, // will be filled by AI later
-    };
+  const score=data.score, grade=scoreGrade(score), catEntries=Object.entries(data.catTotals).sort((a,b)=>b[1]-a[1]);
+  const fmtHour=(h)=>h===0?'12 AM':h<12?h+' AM':h===12?'12 PM':(h-12)+' PM';
+  const logRows=data.timeBlocks.filter(b=>b.duration>=60000).map(b=>{
+    const st=new Date(b.start).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}), et=new Date(b.end).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}), color=CAT_COLORS[b.category]||'#64748b';
+    return {start:st,end:et,apps:b.apps,category:b.category,color,duration:b.duration,localDesc:inferTaskDescription(b.apps,b.category,b.titles||[],b.duration),aiDesc:null};
   });
+  window._timeLogRows=logRows;
+  const pLabel=_aiSettings.provider==='none'?'':'<span style="font-size:9px;color:var(--muted);margin-left:8px">AI: '+_aiSettings.provider+'</span>';
+  const noBanner=_aiSettings.provider==='none'?'<div style="background:rgba(91,156,246,0.05);border:1px solid rgba(91,156,246,0.15);border-radius:var(--r-sm);padding:10px 14px;margin-bottom:14px;display:flex;align-items:center;gap:10px"><span style="font-size:16px">🧠</span><div style="flex:1"><div style="font-size:12px;color:var(--text2);font-weight:500">AI Enhancement Available</div><div style="font-size:10.5px;color:var(--muted);margin-top:2px">Enable an AI provider in Settings for smarter task descriptions and narratives.</div></div><button class="topbar-btn" style="font-size:10.5px;padding:4px 10px" onclick="openSettings()">Configure</button></div>':'';
+  const tRows=logRows.map((r,i)=>'<tr class="timelog-row"><td class="timelog-time">'+r.start+'</td><td class="timelog-time">'+r.end+'</td><td class="timelog-task" id="timelog-task-'+i+'"><div class="timelog-task-text">'+esc(r.localDesc)+'</div><div class="timelog-task-apps">'+r.apps.map(a=>esc(a)).join(', ')+'</div></td><td><span class="timelog-cat-pill" style="background:'+r.color+'22;color:'+r.color+';border:1px solid '+r.color+'44">'+r.category+'</span></td><td class="timelog-dur">'+msToHuman(r.duration)+'</td></tr>').join('');
+  wrap.innerHTML=noBanner+'<div class="summary-card" style="border-top:2px solid '+grade.color+'"><div class="summary-header-row"><div class="summary-section-title" style="margin-bottom:0">📋 Time Log — '+data.date+pLabel+'</div><div style="display:flex;gap:8px;align-items:center"><div class="summary-badge">'+grade.label+' · Score '+score+'</div><button class="topbar-btn" style="font-size:11px;padding:4px 10px" onclick="copyTimeLog()">📋 Copy</button></div></div><div style="margin-top:14px;display:flex;gap:16px;margin-bottom:18px;flex-wrap:wrap"><div style="font-size:12px;color:var(--text2)">⏱ <strong style="color:var(--accent)">'+msToHuman(data.totalMs)+'</strong> tracked</div><div style="font-size:12px;color:var(--text2)">🎯 <strong style="color:var(--green)">'+msToHuman(data.productiveMs)+'</strong> productive</div><div style="font-size:12px;color:var(--text2)">📱 <strong style="color:var(--purple)">'+data.appCount+'</strong> apps</div>'+(data.peakHour?'<div style="font-size:12px;color:var(--text2)">⏰ Peak: <strong style="color:var(--yellow)">'+fmtHour(data.peakHour.hour)+'</strong></div>':'')+'</div><div class="timelog-table-wrap"><table class="timelog-table"><thead><tr><th>Start</th><th>End</th><th>Task / Activity</th><th>Category</th><th style="text-align:right">Duration</th></tr></thead><tbody>'+tRows+'</tbody><tfoot><tr class="timelog-total-row"><td colspan="4" style="text-align:right;font-weight:700;color:var(--text2)">Total Logged</td><td class="timelog-dur" style="font-weight:800;color:var(--accent)">'+msToHuman(data.totalMs)+'</td></tr></tfoot></table></div></div><div class="summary-card" id="ai-narrative-card">'+(_aiSettings.provider==='none'?'<div class="summary-section-title">📊 Day Overview</div><div style="font-size:13px;color:var(--text2);line-height:1.7">'+buildLocalNarrative(data)+'</div>':'<div class="summary-generating"><div class="summary-spinner"></div><div class="summary-gen-text">Generating AI insights…</div></div>')+'</div><div style="display:grid;grid-template-columns:1fr 1fr;gap:14px"><div class="summary-card"><div class="summary-section-title">Time Distribution</div><div style="display:flex;flex-direction:column;gap:8px">'+catEntries.map(([cat,ms])=>{const p=Math.round(ms/data.totalMs*100),c=CAT_COLORS[cat]||'#64748b';return '<div style="display:flex;align-items:center;gap:10px"><div style="width:8px;height:8px;border-radius:2px;background:'+c+';flex-shrink:0"></div><div style="flex:1;font-size:12px;color:var(--text2);font-weight:500">'+cat+'</div><div style="width:100px;height:4px;background:var(--border2);border-radius:2px;overflow:hidden"><div style="width:'+p+'%;height:100%;background:'+c+';border-radius:2px"></div></div><div style="font-size:11px;color:var(--muted);min-width:36px;text-align:right">'+msToHuman(ms)+'</div><div style="font-size:10px;color:var(--muted);width:28px;text-align:right">'+p+'%</div></div>';}).join('')+'</div></div><div class="summary-card"><div class="summary-section-title">Top Apps</div><div style="display:flex;flex-direction:column;gap:4px">'+data.topApps.slice(0,6).map(a=>{const c=CAT_COLORS[a.category]||'#64748b';return '<div style="display:flex;align-items:center;gap:8px;padding:4px 6px">'+appIcon(a.app)+'<div style="flex:1;min-width:0"><div style="font-size:11.5px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+esc(a.app)+'</div></div><div style="font-size:10.5px;color:var(--muted)">'+msToHuman(a.ms)+'</div></div>';}).join('')+'</div></div></div>';
+}
 
-  // Store for AI injection later
-  window._timeLogRows = logRows;
-
-  const timeLogHtml = logRows.map((r, i) => `
-    <tr class="timelog-row">
-      <td class="timelog-time">${r.start}</td>
-      <td class="timelog-time">${r.end}</td>
-      <td class="timelog-task" id="timelog-task-${i}">
-        <div class="timelog-task-text">${esc(r.localDesc)}</div>
-        <div class="timelog-task-apps">${r.apps.map(a => esc(a)).join(', ')}</div>
-      </td>
-      <td><span class="timelog-cat-pill" style="background:${r.color}22;color:${r.color};border:1px solid ${r.color}44">${r.category}</span></td>
-      <td class="timelog-dur">${msToHuman(r.duration)}</td>
-    </tr>
-  `).join('');
-
-  wrap.innerHTML = `
-    <div class="summary-card" style="border-top:2px solid ${grade.color}">
-      <div class="summary-header-row">
-        <div class="summary-section-title" style="margin-bottom:0">📋 Time Log — ${data.date}</div>
-        <div style="display:flex;gap:8px;align-items:center">
-          <div class="summary-badge">${grade.label} · Score ${score}</div>
-          <button class="topbar-btn" style="font-size:11px;padding:4px 10px" onclick="copyTimeLog()">📋 Copy</button>
-        </div>
-      </div>
-      <div style="margin-top:14px;display:flex;gap:16px;margin-bottom:18px;flex-wrap:wrap">
-        <div style="font-size:12px;color:var(--text2)">⏱ <strong style="color:var(--accent)">${msToHuman(data.totalMs)}</strong> tracked</div>
-        <div style="font-size:12px;color:var(--text2)">🎯 <strong style="color:var(--green)">${msToHuman(data.productiveMs)}</strong> productive</div>
-        <div style="font-size:12px;color:var(--text2)">📱 <strong style="color:var(--purple)">${data.appCount}</strong> apps</div>
-        ${data.peakHour ? `<div style="font-size:12px;color:var(--text2)">⏰ Peak: <strong style="color:var(--yellow)">${fmtHour(data.peakHour.hour)}</strong></div>` : ''}
-      </div>
-      <div class="timelog-table-wrap">
-        <table class="timelog-table">
-          <thead>
-            <tr>
-              <th>Start</th>
-              <th>End</th>
-              <th>Task / Activity</th>
-              <th>Category</th>
-              <th style="text-align:right">Duration</th>
-            </tr>
-          </thead>
-          <tbody>${timeLogHtml}</tbody>
-          <tfoot>
-            <tr class="timelog-total-row">
-              <td colspan="4" style="text-align:right;font-weight:700;color:var(--text2)">Total Logged</td>
-              <td class="timelog-dur" style="font-weight:800;color:var(--accent)">${msToHuman(data.totalMs)}</td>
-            </tr>
-          </tfoot>
-        </table>
-      </div>
-    </div>
-    <div class="summary-card" id="ai-narrative-card">
-      <div class="summary-generating"><div class="summary-spinner"></div><div class="summary-gen-text">Generating AI insights…</div></div>
-    </div>
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
-      <div class="summary-card">
-        <div class="summary-section-title">Time Distribution</div>
-        <div style="display:flex;flex-direction:column;gap:8px">
-          ${catEntries.map(([cat, ms]) => {
-            const pct = Math.round(ms / data.totalMs * 100);
-            const color = CAT_COLORS[cat] || '#64748b';
-            return `<div style="display:flex;align-items:center;gap:10px">
-              <div style="width:8px;height:8px;border-radius:2px;background:${color};flex-shrink:0"></div>
-              <div style="flex:1;font-size:12px;color:var(--text2);font-weight:500">${cat}</div>
-              <div style="width:100px;height:4px;background:var(--border2);border-radius:2px;overflow:hidden"><div style="width:${pct}%;height:100%;background:${color};border-radius:2px"></div></div>
-              <div style="font-size:11px;color:var(--muted);min-width:36px;text-align:right">${msToHuman(ms)}</div>
-              <div style="font-size:10px;color:var(--muted);width:28px;text-align:right">${pct}%</div>
-            </div>`;
-          }).join('')}
-        </div>
-      </div>
-      <div class="summary-card">
-        <div class="summary-section-title">Top Apps</div>
-        <div style="display:flex;flex-direction:column;gap:4px">
-          ${data.topApps.slice(0, 6).map(a => {
-            const color = CAT_COLORS[a.category] || '#64748b';
-            return `<div style="display:flex;align-items:center;gap:8px;padding:4px 6px">
-              ${appIcon(a.app)}
-              <div style="flex:1;min-width:0"><div style="font-size:11.5px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(a.app)}</div></div>
-              <div style="font-size:10.5px;color:var(--muted)">${msToHuman(a.ms)}</div>
-            </div>`;
-          }).join('')}
-        </div>
-      </div>
-    </div>`;
+function buildLocalNarrative(data) {
+  const fH=(h)=>h===0?'12 AM':h<12?h+' AM':h===12?'12 PM':(h-12)+' PM';
+  const ce=Object.entries(data.catTotals).sort((a,b)=>b[1]-a[1]);
+  const tc=ce[0]?ce[0][0]:'various', ta=data.topApps[0]?data.topApps[0].app:'';
+  const dw=data.catTotals['Deep Work']||0, em=(data.catTotals['Entertainment']||0)+(data.catTotals['Social Media']||0);
+  let n='You tracked <strong>'+msToHuman(data.totalMs)+'</strong> across '+data.appCount+' apps. Most time in <strong>'+tc+'</strong>'+(ta?', primarily <strong>'+ta+'</strong>':'')+'. ';
+  if(data.peakHour) n+='Peak activity around <strong>'+fH(data.peakHour.hour)+'</strong>. ';
+  if(dw>0) n+=msToHuman(dw)+' of deep work logged. ';
+  if(em>3600000) n+='Entertainment & social totalled '+msToHuman(em)+' — consider shorter breaks tomorrow. ';
+  else if(em>0) n+='Entertainment kept to '+msToHuman(em)+'. ';
+  n+='Score: <strong style="color:'+scoreGrade(data.score).color+'">'+data.score+'/100</strong>.';
+  return n;
 }
 
 function injectAIEnhancements(data, aiText) {
-  const parts = aiText.split('---');
-  const timeLogPart = parts[0] || '';
-  const narrativePart = parts.slice(1).join('---') || '';
-
-  // Parse AI time log descriptions and inject into the table
-  const aiLines = timeLogPart.split('\n').filter(l => l.includes('|') && l.match(/\d/));
-  const rows = window._timeLogRows || [];
-
-  for (let i = 0; i < Math.min(aiLines.length, rows.length); i++) {
-    const segments = aiLines[i].split('|').map(s => s.trim());
-    // The task description is typically the second segment
-    const desc = segments.length >= 3 ? segments[1] : segments[segments.length - 1];
-    if (desc && desc.length > 3) {
-      rows[i].aiDesc = desc;
-      const cell = document.getElementById(`timelog-task-${i}`);
-      if (cell) {
-        const taskText = cell.querySelector('.timelog-task-text');
-        if (taskText) {
-          taskText.textContent = desc;
-          taskText.style.color = 'var(--text)';
-        }
-      }
-    }
+  const parts=aiText.split('---'), tlp=parts[0]||'', np=parts.slice(1).join('---')||'';
+  const lines=tlp.split('\n').filter(l=>l.includes('|')&&l.match(/\d/)), rows=window._timeLogRows||[];
+  for(let i=0;i<Math.min(lines.length,rows.length);i++){
+    const segs=lines[i].split('|').map(s=>s.trim()), desc=segs.length>=3?segs[1]:segs[segs.length-1];
+    if(desc&&desc.length>3){rows[i].aiDesc=desc;const c=document.getElementById('timelog-task-'+i);if(c){const t=c.querySelector('.timelog-task-text');if(t){t.textContent=desc;t.style.color='var(--text)';}}}
   }
-
-  // Inject narrative
-  const aiCard = document.getElementById('ai-narrative-card');
-  if (aiCard && narrativePart.trim()) {
-    const formatted = narrativePart.trim()
-      .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
-      .replace(/\n\n/g, '</p><p>')
-      .replace(/\n/g, '<br>');
-    aiCard.innerHTML = `
-      <div class="summary-section-title">🧠 AI Analysis</div>
-      <div class="summary-narrative"><p>${formatted}</p></div>`;
-  } else if (aiCard && !narrativePart.trim()) {
-    aiCard.innerHTML = '';
-  }
+  const ac=document.getElementById('ai-narrative-card');
+  if(ac&&np.trim()){const f=np.trim().replace(/\*\*([^*]+)\*\*/g,'<strong>$1</strong>').replace(/\n\n/g,'</p><p>').replace(/\n/g,'<br>');ac.innerHTML='<div class="summary-section-title">🧠 AI Analysis</div><div class="summary-narrative"><p>'+f+'</p></div>';}
+  else if(ac) ac.innerHTML='<div class="summary-section-title">🧠 AI Analysis</div><div style="font-size:12px;color:var(--muted)">AI enhanced the time log entries above.</div>';
 }
 
 function copyTimeLog() {
-  const rows = window._timeLogRows || [];
-  if (!rows.length) return;
-
-  let text = 'TIME LOG\n';
-  text += '─'.repeat(60) + '\n';
-  text += 'Start     End       Duration  Task / Activity\n';
-  text += '─'.repeat(60) + '\n';
-
-  let totalMs = 0;
-  for (const r of rows) {
-    const desc = r.aiDesc || r.localDesc;
-    const dur = msToHuman(r.duration).padEnd(9);
-    text += `${r.start.padEnd(10)}${r.end.padEnd(10)}${dur} ${desc}\n`;
-    totalMs += r.duration;
-  }
-
-  text += '─'.repeat(60) + '\n';
-  text += `${''.padEnd(20)}${msToHuman(totalMs).padEnd(9)} TOTAL\n`;
-
-  navigator.clipboard.writeText(text).then(() => {
-    const btn = document.querySelector('[onclick="copyTimeLog()"]');
-    if (btn) {
-      btn.textContent = '✓ Copied!';
-      btn.style.color = 'var(--green)';
-      setTimeout(() => { btn.textContent = '📋 Copy'; btn.style.color = ''; }, 2500);
-    }
-  });
+  const rows=window._timeLogRows||[];if(!rows.length)return;
+  let text='TIME LOG\n'+'─'.repeat(70)+'\nStart      End        Duration   Task / Activity\n'+'─'.repeat(70)+'\n';
+  let total=0;
+  for(const r of rows){text+=r.start.padEnd(11)+r.end.padEnd(11)+msToHuman(r.duration).padEnd(11)+(r.aiDesc||r.localDesc)+'\n';total+=r.duration;}
+  text+='─'.repeat(70)+'\n'+''.padEnd(22)+msToHuman(total).padEnd(11)+'TOTAL\n';
+  navigator.clipboard.writeText(text).then(()=>{const b=document.querySelector('[onclick="copyTimeLog()"]');if(b){b.textContent='✓ Copied!';b.style.color='var(--green)';setTimeout(()=>{b.textContent='📋 Copy';b.style.color='';},2500);}});
 }
 </script>
 </body>

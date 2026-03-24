@@ -1514,6 +1514,25 @@ ipcMain.handle('get-extension-status', () => {
   };
 });
 
+// ── AI Settings (stored in app_state) ────────────────────────────────────────
+ipcMain.handle('get-ai-settings', () => {
+  if (!db) return { provider: 'none', apiKey: '' };
+  try {
+    const rows = db.exec("SELECT key, value FROM app_state WHERE key IN ('ai_provider','ai_api_key')");
+    const map = {};
+    if (rows.length) for (const [k, v] of rows[0].values) map[k] = v;
+    return { provider: map['ai_provider'] || 'none', apiKey: map['ai_api_key'] || '' };
+  } catch(e) { return { provider: 'none', apiKey: '' }; }
+});
+
+ipcMain.handle('set-ai-settings', (_, provider, apiKey) => {
+  if (!db) return false;
+  db.run("INSERT OR REPLACE INTO app_state (key, value) VALUES ('ai_provider', ?)", [provider || 'none']);
+  if (apiKey !== undefined) db.run("INSERT OR REPLACE INTO app_state (key, value) VALUES ('ai_api_key', ?)", [apiKey || '']);
+  saveDB();
+  return true;
+});
+
 ipcMain.handle('get-auto-start', () => {
   return app.getLoginItemSettings().openAtLogin;
 });

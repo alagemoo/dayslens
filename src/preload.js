@@ -21,4 +21,6 @@ contextBridge.exposeInMainWorld('daylens', {
   // New APIs
   getExtensionStatus:   ()                          => ipcRenderer.invoke('get-extension-status'),
   getDailySummaryData:  (offset)                    => ipcRenderer.invoke('get-daily-summary-data', offset),
+  getAISettings:        ()                          => ipcRenderer.invoke('get-ai-settings'),
+  setAISettings:        (provider, apiKey)           => ipcRenderer.invoke('set-ai-settings', provider, apiKey),
 });
