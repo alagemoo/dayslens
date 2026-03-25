@@ -1672,11 +1672,47 @@ function nodeFetch(url, method, headers, body) {
 }
 
 ipcMain.handle('get-auto-start', () => {
+  if (app.isPackaged) {
+    // In production: check the Windows registry directly
+    try {
+      const { execSync } = require('child_process');
+      const result = execSync(
+        'reg query "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run" /v DayLens',
+        { windowsHide: true, timeout: 3000 }
+      ).toString();
+      return result.includes('DayLens');
+    } catch(e) {
+      return false; // key doesn't exist = not enabled
+    }
+  }
+  // In dev mode, use Electron's built-in (won't persist to production)
   return app.getLoginItemSettings().openAtLogin;
 });
 
 ipcMain.handle('set-auto-start', (_, val) => {
-  app.setLoginItemSettings({ openAtLogin: !!val });
+  if (app.isPackaged) {
+    // In production: write/remove registry entry with --hidden flag
+    try {
+      const { execSync } = require('child_process');
+      const exePath = process.execPath; // full path to DayLens.exe
+      if (val) {
+        execSync(
+          `reg add "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run" /v DayLens /t REG_SZ /d "\\"${exePath}\\" --hidden" /f`,
+          { windowsHide: true, timeout: 3000 }
+        );
+      } else {
+        execSync(
+          'reg delete "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run" /v DayLens /f',
+          { windowsHide: true, timeout: 3000 }
+        );
+      }
+    } catch(e) {
+      console.error('[DayLens] Auto-start registry error:', e.message);
+    }
+  } else {
+    // Dev mode fallback
+    app.setLoginItemSettings({ openAtLogin: !!val });
+  }
   return true;
 });
 
@@ -1726,7 +1762,10 @@ let tray = null;
 
 function createWindow() {
   const startHidden = process.argv.includes('--hidden');
-  const appIcon = path.join(__dirname, '../assets/icon.ico');
+  const iconPath = path.join(__dirname, '../assets/icon.ico');
+  const iconFallback = path.join(__dirname, '../assets/icon.png');
+  const resolvedIcon = fs.existsSync(iconPath) ? iconPath : iconFallback;
+  const appIcon = nativeImage.createFromPath(resolvedIcon);
   mainWindow = new BrowserWindow({
     width: 1200, height: 780, minWidth: 900, minHeight: 600,
     backgroundColor: '#06070f',
@@ -2124,6 +2163,33 @@ app.whenReady().then(async () => {
   powerMonitor.on('unlock-screen', onSystemResume);
   powerMonitor.on('resume',        onSystemResume);
   await initDB();
+
+  // ── Default auto-start: enable on first run, never override user's choice ──
+  try {
+    const asRows = db.exec("SELECT value FROM app_state WHERE key='autostart_initialized'");
+    const alreadyInitialized = asRows.length && asRows[0].values.length;
+    if (!alreadyInitialized) {
+      // First run — enable auto-start by default
+      if (app.isPackaged) {
+        const exePath = process.execPath;
+        try {
+          execSync(
+            `reg add "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run" /v DayLens /t REG_SZ /d "\\"${exePath}\\" --hidden" /f`,
+            { windowsHide: true, timeout: 3000 }
+          );
+          console.log('[DayLens] Auto-start enabled by default (first run)');
+        } catch(re) {
+          console.error('[DayLens] Could not set auto-start:', re.message);
+        }
+      } else {
+        app.setLoginItemSettings({ openAtLogin: true });
+      }
+      // Mark as initialized so we never override the user's toggle
+      db.run("INSERT OR REPLACE INTO app_state (key, value) VALUES ('autostart_initialized', '1')");
+      saveDB();
+    }
+  } catch(e) {}
+
   createWindow();
   startTracking();
   startWebSocketServer();
