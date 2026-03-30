@@ -336,6 +336,8 @@ html,body{width:100%;height:100%;overflow:hidden;background:var(--bg);color:var(
 .timelog-cat-pill{font-size:9.5px;padding:2px 9px;border-radius:12px;font-weight:600;white-space:nowrap;display:inline-block}
 .timelog-dur{font-family:'JetBrains Mono',monospace;font-size:12px;color:var(--muted);text-align:right;white-space:nowrap;font-weight:500;width:60px}
 .timelog-total-row td{padding:12px 10px;border-top:2px solid var(--border2);border-bottom:none}
+.timelog-misc-row{opacity:0.6}
+.timelog-misc-text{font-style:italic;font-size:12px!important}
 /* AI Provider settings */
 .ai-provider-option{display:flex;align-items:flex-start;gap:9px;padding:8px 10px;border-radius:var(--r-xs);border:1px solid var(--border);cursor:pointer;transition:all 0.15s}
 .ai-provider-option:hover{border-color:var(--border2);background:var(--surface2)}
@@ -1563,15 +1565,108 @@ function buildSummaryPrompt(data) {
 function renderTimeLog(wrap, data) {
   const score=data.score, grade=scoreGrade(score), catEntries=Object.entries(data.catTotals).sort((a,b)=>b[1]-a[1]);
   const fmtHour=(h)=>h===0?'12 AM':h<12?h+' AM':h===12?'12 PM':(h-12)+' PM';
-  const logRows=data.timeBlocks.filter(b=>b.duration>=60000).map(b=>{
-    const st=new Date(b.start).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}), et=new Date(b.end).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}), color=CAT_COLORS[b.category]||'#64748b';
-    return {start:st,end:et,apps:b.apps,category:b.category,color,duration:b.duration,localDesc:inferTaskDescription(b.apps,b.category,b.titles||[],b.duration),aiDesc:null};
+  const MIN_SUMMARY_MS = 15 * 60 * 1000; // 15 min minimum for Day Summary
+  const MERGE_GAP_MS = 90 * 60 * 1000;   // Only merge same-task blocks within 90 min of each other
+
+  // Step 1: Build raw rows with smart grouping keys
+  // The grouping key is MORE specific than the display description:
+  //   - Communication is split by medium: "comm:meeting" vs "comm:email" vs "comm:chat"
+  //   - Deep Work is split by tool cluster: "deep:code" vs "deep:ai" vs "deep:github"
+  //   - Everything else groups by inferred description
+  function groupKey(apps, category, desc) {
+    const a = apps.map(x => x.toLowerCase());
+    if (category === 'Communication') {
+      if (a.some(x => ['zoom','meet.google','teams'].some(k => x.includes(k)))) return 'comm:meetings';
+      if (a.some(x => ['gmail','outlook','mail'].some(k => x.includes(k)))) return 'comm:email';
+      if (a.some(x => ['whatsapp','telegram','signal','discord'].some(k => x.includes(k)))) return 'comm:messaging';
+      if (a.some(x => x.includes('slack'))) return 'comm:slack';
+      return 'comm:other';
+    }
+    if (category === 'Deep Work') {
+      if (a.some(x => ['code','vscode','visual studio','sublime','cursor','vim','neovim','webstorm'].some(k => x.includes(k)))) return 'deep:coding';
+      if (a.some(x => ['claude.ai','chatgpt','gemini','perplexity','copilot','phind','poe'].some(k => x.includes(k)))) return 'deep:ai-tools';
+      if (a.some(x => x.includes('github.com'))) return 'deep:github';
+      if (a.some(x => ['figma','canva','inkscape','photoshop','illustrator'].some(k => x.includes(k)))) return 'deep:design';
+      return 'deep:other';
+    }
+    // For other categories, group by description (already specific enough)
+    return desc;
+  }
+
+  const rawRows = data.timeBlocks.filter(b => b.duration >= 30000).map(b => {
+    const color = CAT_COLORS[b.category] || '#64748b';
+    const desc = inferTaskDescription(b.apps, b.category, b.titles || [], b.duration);
+    const gk = groupKey(b.apps, b.category, desc);
+    return { startTs: b.start, endTs: b.end, apps: b.apps, category: b.category, color, duration: b.duration, localDesc: desc, groupKey: gk };
   });
-  window._timeLogRows=logRows;
+
+  // Step 2: Proximity-aware merging — only merge blocks of the same groupKey
+  // that are within MERGE_GAP_MS of each other. If the same task appears at
+  // 9 AM and again at 4 PM, they stay separate rows.
+  const merged = [];
+  for (const r of rawRows) {
+    // Find the last merged entry with the same groupKey where the gap is small enough
+    let target = null;
+    for (let i = merged.length - 1; i >= 0; i--) {
+      if (merged[i].groupKey === r.groupKey && (r.startTs - merged[i].endTs) < MERGE_GAP_MS) {
+        target = merged[i];
+        break;
+      }
+    }
+    if (target) {
+      target.duration += r.duration;
+      target.endTs = Math.max(target.endTs, r.endTs);
+      for (const a of r.apps) target.appsSet.add(a);
+      // Keep the more descriptive label if this block has a better one
+      if (r.localDesc.length > target.localDesc.length) target.localDesc = r.localDesc;
+    } else {
+      merged.push({
+        startTs: r.startTs, endTs: r.endTs, appsSet: new Set(r.apps),
+        category: r.category, color: r.color, duration: r.duration,
+        localDesc: r.localDesc, groupKey: r.groupKey, aiDesc: null,
+      });
+    }
+  }
+
+  // Step 3: Convert to display rows, apply 15-min filter, sort chronologically
+  const significantRows = merged
+    .filter(g => g.duration >= MIN_SUMMARY_MS)
+    .sort((a, b) => a.startTs - b.startTs)
+    .map(g => ({
+      start: new Date(g.startTs).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      end: new Date(g.endTs).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      apps: [...g.appsSet],
+      category: g.category,
+      color: g.color,
+      duration: g.duration,
+      localDesc: g.localDesc,
+      aiDesc: null,
+    }));
+
+  // Step 4: Collect filtered time into an "Other / misc" catch-all row
+  // so the total always reconciles with tracked time
+  const significantMs = significantRows.reduce((s, r) => s + r.duration, 0);
+  const miscMs = data.totalMs - significantMs;
+  const logRows = [...significantRows];
+  if (miscMs >= 60000) {
+    // Add a catch-all row at the end — don't let time vanish from the log
+    logRows.push({
+      start: '—', end: '—',
+      apps: [],
+      category: 'Other',
+      color: CAT_COLORS['Other'] || '#64748b',
+      duration: miscMs,
+      localDesc: 'Other / miscellaneous activities (<15 min each)',
+      aiDesc: null,
+    });
+  }
+
+  window._timeLogRows = logRows;
+  const loggedMs = logRows.reduce((s, r) => s + r.duration, 0);
   const pLabel=_aiSettings.provider==='none'?'':'<span style="font-size:9px;color:var(--muted);margin-left:8px">AI: '+_aiSettings.provider+'</span>';
   const noBanner=_aiSettings.provider==='none'?'<div style="background:rgba(91,156,246,0.05);border:1px solid rgba(91,156,246,0.15);border-radius:var(--r-sm);padding:10px 14px;margin-bottom:14px;display:flex;align-items:center;gap:10px"><span style="font-size:16px">🧠</span><div style="flex:1"><div style="font-size:12px;color:var(--text2);font-weight:500">AI Enhancement Available</div><div style="font-size:10.5px;color:var(--muted);margin-top:2px">Enable an AI provider in Settings for smarter task descriptions and narratives.</div></div><button class="topbar-btn" style="font-size:10.5px;padding:4px 10px" onclick="openSettings()">Configure</button></div>':'';
-  const tRows=logRows.map((r,i)=>'<tr class="timelog-row"><td class="timelog-time">'+r.start+'</td><td class="timelog-time">'+r.end+'</td><td class="timelog-task" id="timelog-task-'+i+'"><div class="timelog-task-text">'+esc(r.localDesc)+'</div><div class="timelog-task-apps">'+r.apps.map(a=>esc(a)).join(', ')+'</div></td><td><span class="timelog-cat-pill" style="background:'+r.color+'22;color:'+r.color+';border:1px solid '+r.color+'44">'+r.category+'</span></td><td class="timelog-dur">'+msToHuman(r.duration)+'</td></tr>').join('');
-  wrap.innerHTML=noBanner+'<div class="summary-card" style="border-top:2px solid '+grade.color+'"><div class="summary-header-row"><div class="summary-section-title" style="margin-bottom:0">📋 Time Log — '+data.date+pLabel+'</div><div style="display:flex;gap:8px;align-items:center"><div class="summary-badge">'+grade.label+' · Score '+score+'</div><button class="topbar-btn" style="font-size:11px;padding:4px 10px" onclick="copyTimeLog()">📋 Copy</button></div></div><div style="margin-top:14px;display:flex;gap:16px;margin-bottom:18px;flex-wrap:wrap"><div style="font-size:12px;color:var(--text2)">⏱ <strong style="color:var(--accent)">'+msToHuman(data.totalMs)+'</strong> tracked</div><div style="font-size:12px;color:var(--text2)">🎯 <strong style="color:var(--green)">'+msToHuman(data.productiveMs)+'</strong> productive</div><div style="font-size:12px;color:var(--text2)">📱 <strong style="color:var(--purple)">'+data.appCount+'</strong> apps</div>'+(data.peakHour?'<div style="font-size:12px;color:var(--text2)">⏰ Peak: <strong style="color:var(--yellow)">'+fmtHour(data.peakHour.hour)+'</strong></div>':'')+'</div><div class="timelog-table-wrap"><table class="timelog-table"><thead><tr><th>Start</th><th>End</th><th>Task / Activity</th><th>Category</th><th style="text-align:right">Duration</th></tr></thead><tbody>'+tRows+'</tbody><tfoot><tr class="timelog-total-row"><td colspan="4" style="text-align:right;font-weight:700;color:var(--text2)">Total Logged</td><td class="timelog-dur" style="font-weight:800;color:var(--accent)">'+msToHuman(data.totalMs)+'</td></tr></tfoot></table></div></div><div class="summary-card" id="ai-narrative-card">'+(_aiSettings.provider==='none'?'<div class="summary-section-title">📊 Day Overview</div><div style="font-size:13px;color:var(--text2);line-height:1.7">'+buildLocalNarrative(data)+'</div>':'<div class="summary-generating"><div class="summary-spinner"></div><div class="summary-gen-text">Generating AI insights…</div></div>')+'</div><div style="display:grid;grid-template-columns:1fr 1fr;gap:14px"><div class="summary-card"><div class="summary-section-title">Time Distribution</div><div style="display:flex;flex-direction:column;gap:8px">'+catEntries.map(([cat,ms])=>{const p=Math.round(ms/data.totalMs*100),c=CAT_COLORS[cat]||'#64748b';return '<div style="display:flex;align-items:center;gap:10px"><div style="width:8px;height:8px;border-radius:2px;background:'+c+';flex-shrink:0"></div><div style="flex:1;font-size:12px;color:var(--text2);font-weight:500">'+cat+'</div><div style="width:100px;height:4px;background:var(--border2);border-radius:2px;overflow:hidden"><div style="width:'+p+'%;height:100%;background:'+c+';border-radius:2px"></div></div><div style="font-size:11px;color:var(--muted);min-width:36px;text-align:right">'+msToHuman(ms)+'</div><div style="font-size:10px;color:var(--muted);width:28px;text-align:right">'+p+'%</div></div>';}).join('')+'</div></div><div class="summary-card"><div class="summary-section-title">Top Apps</div><div style="display:flex;flex-direction:column;gap:4px">'+data.topApps.slice(0,6).map(a=>{const c=CAT_COLORS[a.category]||'#64748b';return '<div style="display:flex;align-items:center;gap:8px;padding:4px 6px">'+appIcon(a.app)+'<div style="flex:1;min-width:0"><div style="font-size:11.5px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+esc(a.app)+'</div></div><div style="font-size:10.5px;color:var(--muted)">'+msToHuman(a.ms)+'</div></div>';}).join('')+'</div></div></div>';
+  const tRows=logRows.map((r,i)=>'<tr class="timelog-row'+(r.start==='—'?' timelog-misc-row':'')+'"><td class="timelog-time">'+r.start+'</td><td class="timelog-time">'+r.end+'</td><td class="timelog-task" id="timelog-task-'+i+'"><div class="timelog-task-text'+(r.start==='—'?' timelog-misc-text':'')+'">'+esc(r.localDesc)+'</div>'+(r.apps.length?'<div class="timelog-task-apps">'+r.apps.map(a=>esc(a)).join(', ')+'</div>':'')+'</td><td><span class="timelog-cat-pill" style="background:'+r.color+'22;color:'+r.color+';border:1px solid '+r.color+'44">'+r.category+'</span></td><td class="timelog-dur">'+msToHuman(r.duration)+'</td></tr>').join('');
+  wrap.innerHTML=noBanner+'<div class="summary-card" style="border-top:2px solid '+grade.color+'"><div class="summary-header-row"><div class="summary-section-title" style="margin-bottom:0">📋 Time Log — '+data.date+pLabel+'</div><div style="display:flex;gap:8px;align-items:center"><div class="summary-badge">'+grade.label+' · Score '+score+'</div><button class="topbar-btn" style="font-size:11px;padding:4px 10px" onclick="copyTimeLog()">📋 Copy</button></div></div><div style="margin-top:14px;display:flex;gap:16px;margin-bottom:18px;flex-wrap:wrap"><div style="font-size:12px;color:var(--text2)">⏱ <strong style="color:var(--accent)">'+msToHuman(data.totalMs)+'</strong> tracked</div><div style="font-size:12px;color:var(--text2)">🎯 <strong style="color:var(--green)">'+msToHuman(data.productiveMs)+'</strong> productive</div><div style="font-size:12px;color:var(--text2)">📱 <strong style="color:var(--purple)">'+data.appCount+'</strong> apps</div>'+(data.peakHour?'<div style="font-size:12px;color:var(--text2)">⏰ Peak: <strong style="color:var(--yellow)">'+fmtHour(data.peakHour.hour)+'</strong></div>':'')+'</div><div class="timelog-table-wrap"><table class="timelog-table"><thead><tr><th>Start</th><th>End</th><th>Task / Activity</th><th>Category</th><th style="text-align:right">Duration</th></tr></thead><tbody>'+tRows+'</tbody><tfoot><tr class="timelog-total-row"><td colspan="4" style="text-align:right;font-weight:700;color:var(--text2)">Total Logged</td><td class="timelog-dur" style="font-weight:800;color:var(--accent)">'+msToHuman(loggedMs)+'</td></tr></tfoot></table></div></div><div class="summary-card" id="ai-narrative-card">'+(_aiSettings.provider==='none'?'<div class="summary-section-title">📊 Day Overview</div><div style="font-size:13px;color:var(--text2);line-height:1.7">'+buildLocalNarrative(data)+'</div>':'<div class="summary-generating"><div class="summary-spinner"></div><div class="summary-gen-text">Generating AI insights…</div></div>')+'</div><div style="display:grid;grid-template-columns:1fr 1fr;gap:14px"><div class="summary-card"><div class="summary-section-title">Time Distribution</div><div style="display:flex;flex-direction:column;gap:8px">'+catEntries.map(([cat,ms])=>{const p=Math.round(ms/data.totalMs*100),c=CAT_COLORS[cat]||'#64748b';return '<div style="display:flex;align-items:center;gap:10px"><div style="width:8px;height:8px;border-radius:2px;background:'+c+';flex-shrink:0"></div><div style="flex:1;font-size:12px;color:var(--text2);font-weight:500">'+cat+'</div><div style="width:100px;height:4px;background:var(--border2);border-radius:2px;overflow:hidden"><div style="width:'+p+'%;height:100%;background:'+c+';border-radius:2px"></div></div><div style="font-size:11px;color:var(--muted);min-width:36px;text-align:right">'+msToHuman(ms)+'</div><div style="font-size:10px;color:var(--muted);width:28px;text-align:right">'+p+'%</div></div>';}).join('')+'</div></div><div class="summary-card"><div class="summary-section-title">Top Apps</div><div style="display:flex;flex-direction:column;gap:4px">'+data.topApps.slice(0,6).map(a=>{const c=CAT_COLORS[a.category]||'#64748b';return '<div style="display:flex;align-items:center;gap:8px;padding:4px 6px">'+appIcon(a.app)+'<div style="flex:1;min-width:0"><div style="font-size:11.5px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+esc(a.app)+'</div></div><div style="font-size:10.5px;color:var(--muted)">'+msToHuman(a.ms)+'</div></div>';}).join('')+'</div></div></div>';
 }
 
 function buildLocalNarrative(data) {

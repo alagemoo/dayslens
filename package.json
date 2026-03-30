@@ -16,8 +16,8 @@
     "electron-builder": "^24.13.3"
   },
   "author": {
-    "name": "Gideon Aniechi",
-    "email": "hello@daylens.app"
+    "name": "Valion Technologies Limited",
+    "email": "valion@valiontech.com"
   },
   "license": "MIT",
   "build": {
@@ -59,8 +59,7 @@
       ],
       "icon": "assets/icon.ico",
       "requestedExecutionLevel": "asInvoker",
-      "executableName": "DayLens",
-      "signAndEditExecutable": false
+      "executableName": "DayLens"
     },
     "nsis": {
       "oneClick": false,
