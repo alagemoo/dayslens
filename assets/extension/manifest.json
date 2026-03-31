@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "DayLens Tracker",
-  "version": "1.1.0",
+  "version": "1.2.3",
   "description": "Tracks websites you visit and sends data to your DayLens desktop app.",
   "permissions": [
     "tabs",

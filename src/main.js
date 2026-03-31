@@ -441,6 +441,120 @@ function endAllBackgroundSessions(now) {
   for (const [url] of backgroundAudioSessions) endBackgroundSession(url, now);
 }
 
+// ── Background Meeting Sessions (desktop apps) ──────────────────────────────
+// Tracks meeting apps (Teams, Zoom, Webex, etc.) that are running in the
+// background while the user works in other windows. A 1-hour Teams meeting
+// where you're clicking around in VS Code and the browser should still
+// show as a full 1-hour meeting on your timesheet.
+//
+// Key = process name key, Value = { id, appName, title, startedAt, lastSeen }
+const backgroundMeetingSessions = new Map();
+
+const MEETING_PROCESSES = {
+  'teams':       'Microsoft Teams',
+  'ms-teams':    'Microsoft Teams',
+  'zoom':        'Zoom',
+  'webex':       'Webex',
+  'gotomeeting': 'GoToMeeting',
+  'skype':       'Skype',
+};
+
+// Title patterns that mean the app is open but NOT in a meeting
+const MEETING_IDLE_TITLES = [
+  'chat |', 'activity |', 'teams |', 'calendar |', 'files |',
+  'assignments |', 'microsoft teams',
+  'zoom workplace', 'zoom -', 'home -',
+  'sign in', 'loading',
+];
+
+// Title patterns that indicate an active meeting/call
+const MEETING_ACTIVE_TITLES = [
+  'meeting', 'call', 'huddle', 'standup', 'stand-up', 'sync',
+  'screen sharing', 'presenting', 'zoom meeting', 'zoom webinar',
+];
+
+function isLikelyInMeeting(procName, winTitle) {
+  const p = (procName || '').toLowerCase();
+  const t = (winTitle || '').toLowerCase();
+  if (!t || t.length < 3) return false;
+  // Is this a meeting app process?
+  const matched = Object.keys(MEETING_PROCESSES).find(k => p.includes(k));
+  if (!matched) return false;
+  // Known idle titles = not in a meeting
+  if (MEETING_IDLE_TITLES.some(s => t.includes(s))) return false;
+  // Positive meeting signals
+  if (MEETING_ACTIVE_TITLES.some(s => t.includes(s))) return true;
+  // Teams heuristic: title with "|" but not a known idle pattern = likely in a call
+  // e.g. "John Doe | Microsoft Teams" = in a call with John
+  if (p.includes('teams') && t.includes('|')) return true;
+  // Zoom: if title doesn't match idle patterns, it's probably a meeting
+  if (p.includes('zoom') && !t.includes('zoom') ) return true;
+  return false;
+}
+
+let _meetingCheckScript = null;
+
+function checkBackgroundMeetings(now) {
+  if (process.platform !== 'win32') return;
+  try {
+    if (!_meetingCheckScript) {
+      _meetingCheckScript = path.join(userDataPath, 'daylens_meetings.ps1');
+      fs.writeFileSync(_meetingCheckScript,
+        `Get-Process | Where-Object {$_.MainWindowTitle -ne ''} | ForEach-Object { "$($_.ProcessName)|||$($_.MainWindowTitle)" }`
+      );
+    }
+    const result = execSync(
+      `powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "${_meetingCheckScript}"`,
+      { timeout: 4000, windowsHide: true }
+    ).toString().trim();
+    if (!result) return;
+
+    const runningMeetings = new Set();
+    for (const line of result.split('\n')) {
+      const parts = line.trim().split('|||');
+      if (parts.length < 2) continue;
+      const [proc, title] = parts;
+      if (!isLikelyInMeeting(proc, title)) continue;
+      const key = Object.keys(MEETING_PROCESSES).find(k => proc.toLowerCase().includes(k));
+      if (!key) continue;
+      runningMeetings.add(key);
+
+      const existing = backgroundMeetingSessions.get(key);
+      if (existing) {
+        existing.lastSeen = now;
+        if (title !== existing.title) {
+          db.run('UPDATE activity SET window_title=? WHERE id=?', [title, existing.id]);
+          existing.title = title;
+        }
+      } else {
+        const displayName = MEETING_PROCESSES[key];
+        db.run('INSERT INTO activity (app_name, window_title, url, started_at, is_background) VALUES (?,?,?,?,1)',
+          [displayName, title, null, now]);
+        const rows = db.exec('SELECT last_insert_rowid() as id');
+        backgroundMeetingSessions.set(key, {
+          id: rows[0].values[0][0], appName: displayName, title, startedAt: now, lastSeen: now
+        });
+        console.log(`[DayLens] Background meeting started: ${displayName} — "${title}"`);
+      }
+    }
+    // End sessions for meetings that are no longer active
+    for (const [key, session] of backgroundMeetingSessions) {
+      if (!runningMeetings.has(key)) {
+        db.run('UPDATE activity SET ended_at=? WHERE id=?', [now, session.id]);
+        backgroundMeetingSessions.delete(key);
+        console.log(`[DayLens] Background meeting ended: ${session.appName}`);
+      }
+    }
+  } catch(e) {}
+}
+
+function endAllBackgroundMeetings(now) {
+  for (const [key, session] of backgroundMeetingSessions) {
+    db.run('UPDATE activity SET ended_at=? WHERE id=?', [now, session.id]);
+  }
+  backgroundMeetingSessions.clear();
+}
+
 // ── Rate limiting for WebSocket messages ─────────────────────────────────────
 let _wsMessageCount = 0;
 let _wsRateLimitReset = Date.now();
@@ -1254,6 +1368,12 @@ function tick() {
       }
     }
 
+    // ── Background meeting detection ────────────────────────────────────────
+    // Check every 30 seconds (every 5th tick) if a meeting app is running
+    // in the background. This catches Teams/Zoom meetings where you're
+    // multitasking in other windows during the call.
+    if (now % 30000 < POLL_MS) checkBackgroundMeetings(now);
+
     // ── Midnight day-rollover ─────────────────────────────────────────────────
     const todayStr = new Date().toDateString();
     if (todayStr !== lastTickDate) {
@@ -1270,6 +1390,7 @@ function tick() {
       }
       // Also end all background audio sessions at midnight
       endAllBackgroundSessions(midnightTs);
+      endAllBackgroundMeetings(midnightTs);
       lastTickDate = todayStr;
       lastActiveTime = now;
       saveDB();
@@ -1314,6 +1435,7 @@ function tick() {
           browserWindowFocused = false;
         }
         endAllBackgroundSessions(idleStart);
+        endAllBackgroundMeetings(idleStart);
         saveDB();
       }
       // Don't track anything while system-idle
@@ -1409,6 +1531,7 @@ function stopTracking() {
     db.run(`UPDATE activity SET ended_at=? WHERE id=?`, [Date.now(), currentBrowserActivity.id]);
     currentBrowserActivity = null;
   }
+  endAllBackgroundMeetings(Date.now());
   saveDB();
 }
 
@@ -2129,15 +2252,14 @@ ipcMain.handle('open-browser-extensions', (_, browser) => {
 
 // ── Screen lock / sleep / hibernate detection ─────────────────────────────────
 function onSystemIdle() {
-  writeAliveTimestamp(); // stamp the last known time before going idle/sleep
-  // Screen locked, sleeping, or user walked away
-  if (currentActivity) {
-    endCurrentActivity();
-  }
+  writeAliveTimestamp();
+  const now = Date.now();
+  if (currentActivity) { endCurrentActivity(); }
   if (currentBrowserActivity) {
-    db.run(`UPDATE activity SET ended_at=? WHERE id=?`, [Date.now(), currentBrowserActivity.id]);
+    db.run(`UPDATE activity SET ended_at=? WHERE id=?`, [now, currentBrowserActivity.id]);
     currentBrowserActivity = null;
   }
+  endAllBackgroundMeetings(now);
   saveDB();
 }
 

@@ -6,7 +6,7 @@ DayLens is a silent, local-first productivity tracker for Windows. It automatica
 
 **Author:** Gideon Aniechi
 **Organization:** Valion Technologies Limited
-**Version:** 1.2.0
+**Version:** 1.2.3
 **License:** MIT — Copyright © 2026 Valion Technologies Limited
 
 ---
@@ -81,14 +81,14 @@ DayLens is a silent, local-first productivity tracker for Windows. It automatica
 
 ### Option A — Installer (recommended)
 
-1. Run **`DayLens-Setup-1.2.0.exe`**
+1. Run **`DayLens-Setup-1.2.3.exe`**
 2. Follow the installer — choose your install directory
 3. A desktop shortcut and Start Menu entry are created automatically
 4. DayLens launches after install
 
 ### Option B — Portable
 
-Run **`DayLens-Portable-1.2.0.exe`** directly — no installation needed. Data is stored in `AppData\Roaming\daylens` regardless of where the exe lives.
+Run **`DayLens-Portable-1.2.3.exe`** directly — no installation needed. Data is stored in `AppData\Roaming\daylens` regardless of where the exe lives.
 
 ### Option C — From Source
 
@@ -115,7 +115,7 @@ npm run build
 5. Click **Load unpacked** and select the extension folder
 6. The sidebar badge turns green with "Extension: connected" when active
 
-> If upgrading from v1.1.0, remove the old extension first and reload it — v1.2.0 has updated manifest permissions.
+> If upgrading from v1.1.0, remove the old extension first and reload it — v1.2.3 has updated manifest permissions.
 
 ---
 
@@ -231,3 +231,7 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 ---
 
 *Built by Gideon Aniechi — [Valion Technologies Limited](https://valiontech.com)*
+
+
+
+![Downloads](https://img.shields.io/github/downloads/alagemoo/dayslens/total?label=Downloads&color=blue)

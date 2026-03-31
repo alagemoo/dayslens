@@ -658,7 +658,7 @@ html,body{width:100%;height:100%;overflow:hidden;background:var(--bg);color:var(
     <div>
       <div class="settings-section-title">About</div>
       <div style="font-size:12px;color:var(--muted);line-height:1.9">
-        <div><strong style="color:var(--text2)">DayLens</strong> v1.2.0</div>
+        <div><strong style="color:var(--text2)">DayLens</strong> v1.2.3</div>
         <div>Local activity tracker — no data leaves your device.</div>
       </div>
     </div>
@@ -1565,32 +1565,69 @@ function buildSummaryPrompt(data) {
 function renderTimeLog(wrap, data) {
   const score=data.score, grade=scoreGrade(score), catEntries=Object.entries(data.catTotals).sort((a,b)=>b[1]-a[1]);
   const fmtHour=(h)=>h===0?'12 AM':h<12?h+' AM':h===12?'12 PM':(h-12)+' PM';
-  const MIN_SUMMARY_MS = 15 * 60 * 1000; // 15 min minimum for Day Summary
-  const MERGE_GAP_MS = 90 * 60 * 1000;   // Only merge same-task blocks within 90 min of each other
+  const MIN_SUMMARY_MS = 10 * 60 * 1000; // 10 min minimum for Day Summary
+  const MERGE_GAP_MS = 2 * 60 * 60 * 1000; // Merge same-task blocks within 2 hours
 
-  // Step 1: Build raw rows with smart grouping keys
-  // The grouping key is MORE specific than the display description:
-  //   - Communication is split by medium: "comm:meeting" vs "comm:email" vs "comm:chat"
-  //   - Deep Work is split by tool cluster: "deep:code" vs "deep:ai" vs "deep:github"
-  //   - Everything else groups by inferred description
+  // Step 1: Build raw rows with BROAD grouping keys
+  // Philosophy: a timesheet has 5-10 rows for a full day, not 20.
+  // Group broadly by WHAT YOU WERE DOING, not which specific tool.
+  //
+  //   "Communication" = all email + chat + messaging (one row)
+  //   "Meetings"      = video calls only (separate — your manager cares)
+  //   "Development"   = coding + AI tools + GitHub + Stack Overflow (one row)
+  //   "Design"        = Figma/Canva/Inkscape etc (one row)
+  //   "Documents"     = Word/Excel/Notion/Notepad (one row)
+  //   Everything else = groups by category
   function groupKey(apps, category, desc) {
     const a = apps.map(x => x.toLowerCase());
-    if (category === 'Communication') {
-      if (a.some(x => ['zoom','meet.google','teams'].some(k => x.includes(k)))) return 'comm:meetings';
-      if (a.some(x => ['gmail','outlook','mail'].some(k => x.includes(k)))) return 'comm:email';
-      if (a.some(x => ['whatsapp','telegram','signal','discord'].some(k => x.includes(k)))) return 'comm:messaging';
-      if (a.some(x => x.includes('slack'))) return 'comm:slack';
-      return 'comm:other';
+    // Meetings stay separate — they're distinct from async communication
+    if (a.some(x => ['zoom','meet.google','teams.microsoft','webex'].some(k => x.includes(k)))) {
+      // Only classify as meeting if it's likely a call, not just Teams chat
+      if (category === 'Communication') return 'meetings';
     }
-    if (category === 'Deep Work') {
-      if (a.some(x => ['code','vscode','visual studio','sublime','cursor','vim','neovim','webstorm'].some(k => x.includes(k)))) return 'deep:coding';
-      if (a.some(x => ['claude.ai','chatgpt','gemini','perplexity','copilot','phind','poe'].some(k => x.includes(k)))) return 'deep:ai-tools';
-      if (a.some(x => x.includes('github.com'))) return 'deep:github';
-      if (a.some(x => ['figma','canva','inkscape','photoshop','illustrator'].some(k => x.includes(k)))) return 'deep:design';
-      return 'deep:other';
-    }
-    // For other categories, group by description (already specific enough)
+    // All other communication merges into one row
+    if (category === 'Communication') return 'communication';
+    // All development work merges: coding + AI assistants + GitHub + debugging
+    if (category === 'Deep Work') return 'development';
+    // Documents — writing, spreadsheets, notes
+    if (category === 'Documents') return 'documents';
+    // Learning
+    if (category === 'Learning') return 'learning';
+    // Browsing — general web research
+    if (category === 'Browsing') return 'browsing';
+    // Social Media
+    if (category === 'Social Media') return 'social-media';
+    // Entertainment
+    if (category === 'Entertainment') return 'entertainment';
+    // System / Other — per description since these are varied
     return desc;
+  }
+
+  // Step 1b: Better display labels for each group key
+  function groupLabel(groupKey, apps, mergedDesc) {
+    const a = [...apps].map(x => x.toLowerCase());
+    switch(groupKey) {
+      case 'meetings': return 'Meetings & conference calls';
+      case 'communication': return 'Communication — email, messaging & chat';
+      case 'development': {
+        // Try to be specific about WHAT was being developed
+        const hasCode = a.some(x => ['code','vscode','visual studio','sublime','cursor','webstorm'].some(k => x.includes(k)));
+        const hasAI = a.some(x => ['claude.ai','chatgpt','gemini','perplexity','copilot'].some(k => x.includes(k)));
+        const hasGH = a.some(x => x.includes('github'));
+        if (hasCode && hasAI) return 'Software development & AI-assisted R&D';
+        if (hasCode && hasGH) return 'Software development & code review';
+        if (hasCode) return 'Software development';
+        if (hasAI) return 'AI-assisted research & development';
+        if (hasGH) return 'Code review & repository management';
+        return mergedDesc || 'Development & technical work';
+      }
+      case 'documents': return 'Documentation & writing';
+      case 'learning': return 'Learning & professional development';
+      case 'browsing': return 'Web research & browsing';
+      case 'social-media': return 'Social media';
+      case 'entertainment': return 'Personal — entertainment & breaks';
+      default: return mergedDesc;
+    }
   }
 
   const rawRows = data.timeBlocks.filter(b => b.duration >= 30000).map(b => {
@@ -1600,12 +1637,9 @@ function renderTimeLog(wrap, data) {
     return { startTs: b.start, endTs: b.end, apps: b.apps, category: b.category, color, duration: b.duration, localDesc: desc, groupKey: gk };
   });
 
-  // Step 2: Proximity-aware merging — only merge blocks of the same groupKey
-  // that are within MERGE_GAP_MS of each other. If the same task appears at
-  // 9 AM and again at 4 PM, they stay separate rows.
+  // Step 2: Proximity-aware merging
   const merged = [];
   for (const r of rawRows) {
-    // Find the last merged entry with the same groupKey where the gap is small enough
     let target = null;
     for (let i = merged.length - 1; i >= 0; i--) {
       if (merged[i].groupKey === r.groupKey && (r.startTs - merged[i].endTs) < MERGE_GAP_MS) {
@@ -1617,7 +1651,6 @@ function renderTimeLog(wrap, data) {
       target.duration += r.duration;
       target.endTs = Math.max(target.endTs, r.endTs);
       for (const a of r.apps) target.appsSet.add(a);
-      // Keep the more descriptive label if this block has a better one
       if (r.localDesc.length > target.localDesc.length) target.localDesc = r.localDesc;
     } else {
       merged.push({
@@ -1628,7 +1661,12 @@ function renderTimeLog(wrap, data) {
     }
   }
 
-  // Step 3: Convert to display rows, apply 15-min filter, sort chronologically
+  // Step 2b: Apply smart labels based on what actually merged
+  for (const g of merged) {
+    g.localDesc = groupLabel(g.groupKey, g.appsSet, g.localDesc);
+  }
+
+  // Step 3: Apply minimum threshold, sort chronologically
   const significantRows = merged
     .filter(g => g.duration >= MIN_SUMMARY_MS)
     .sort((a, b) => a.startTs - b.startTs)
