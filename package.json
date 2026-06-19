@@ -5,13 +5,15 @@
   "main": "src/main.js",
   "scripts": {
     "start": "electron .",
-    "build": "electron-builder --win --x64",
-    "build:dir": "electron-builder --win --x64 --dir"
+    "build": "cross-env CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --win --x64",
+    "build:dir": "cross-env CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --win --x64 --dir"
   },
+  
   "dependencies": {
     "sql.js": "^1.12.0"
   },
   "devDependencies": {
+    "cross-env": "^7.0.3",
     "electron": "^29.0.0",
     "electron-builder": "^24.13.3"
   },
@@ -43,6 +45,7 @@
       }
     ],
     "win": {
+      "sign": "scripts/skip-sign.js",
       "target": [
         {
           "target": "nsis",
@@ -82,4 +85,5 @@
     },
     "publish": null
   }
+  
 }
