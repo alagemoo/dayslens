@@ -1240,6 +1240,103 @@ function guessCategory(appName, title) {
   return { category: 'Other', productive: 1 };
 }
 
+// ── Project detection ─────────────────────────────────────────────────────────
+// Extracts a *project* name from window titles, repo slugs, app domains, or
+// user-defined rules. Returns null when there's no confident signal — generic
+// browsing/comms intentionally stay project-less and fall back to category.
+// This is what lets the Day Log show "Software development — Cephas" instead of
+// collapsing every coding session into one undifferentiated "Software development".
+function capWords(s) {
+  return String(s || '').replace(/[._]+/g, ' ').replace(/-+/g, ' ')
+    .split(' ').filter(Boolean)
+    .map(w => /^[A-Z0-9]+$/.test(w) ? w : (w.charAt(0).toUpperCase() + w.slice(1)))
+    .join(' ').trim().substring(0, 40);
+}
+
+let _projectRulesCache = null;
+let _projectRulesCacheAt = 0;
+function getProjectRules() {
+  // Cache for 5s so a full day's loop doesn't hit SQLite per-activity
+  const now = Date.now();
+  if (_projectRulesCache && (now - _projectRulesCacheAt) < 5000) return _projectRulesCache;
+  let rules = [];
+  if (db) {
+    try {
+      const rows = db.exec("SELECT value FROM app_state WHERE key='project_rules'");
+      if (rows.length && rows[0].values.length) {
+        const parsed = JSON.parse(rows[0].values[0][0]);
+        if (Array.isArray(parsed)) rules = parsed;
+      }
+    } catch (e) { rules = []; }
+  }
+  _projectRulesCache = rules;
+  _projectRulesCacheAt = now;
+  return rules;
+}
+
+// Editors whose titles encode the workspace folder as a middle segment
+const _EDITOR_KEYS = ['code','visual studio code','code - insiders','vscodium','cursor','windsurf','sublime text','atom'];
+const _JETBRAINS_KEYS = ['webstorm','intellij','pycharm','phpstorm','rider','goland','clion','rubymine','datagrip','android studio'];
+
+function detectProject(appName, title, url, rules) {
+  const a = (appName || '').toLowerCase();
+  const t = (title || '');
+  const tl = t.toLowerCase();
+  const u = (url || '').toLowerCase();
+  rules = rules || getProjectRules();
+
+  // 1. USER RULES WIN. Each rule: { name, match: [keywords] } — matched against
+  //    title, url, or app name. This is how you pin localhost:3000 -> "Cephas",
+  //    or "usecephas" / "kingdom-intelligence" -> "Cephas".
+  for (const r of (rules || [])) {
+    if (!r || !r.name || !Array.isArray(r.match)) continue;
+    for (const kw of r.match) {
+      const k = String(kw || '').toLowerCase().trim();
+      if (k && (tl.includes(k) || u.includes(k) || a.includes(k))) return r.name;
+    }
+  }
+
+  // 2. GitHub repo slug (owner/repo) from URL or title
+  let m = u.match(/github\.com\/[^\/]+\/([a-z0-9._-]+)/i);
+  if (m && m[1] && m[1] !== 'settings') return capWords(m[1]);
+  if (a.includes('github')) {
+    m = t.match(/([A-Za-z0-9._-]+)\/([A-Za-z0-9._-]+)(?::| at |\s·|\s—)/);
+    if (m && m[2]) return capWords(m[2]);
+  }
+
+  // 3. Editor workspace folder. VS Code/Cursor/Sublime title:
+  //    "file.ext — FOLDER — Visual Studio Code"  (em/en dash or " - " hyphen)
+  if (_EDITOR_KEYS.some(k => a.includes(k)) || /visual studio code|cursor|sublime text/i.test(t)) {
+    const segs = t.split(/\s+[—–]\s+|\s+-\s+/).map(s => s.trim()).filter(Boolean);
+    if (segs.length >= 2) {
+      const folder = segs[segs.length - 2]; // last seg = app name; folder precedes it
+      if (folder && folder.length <= 40 &&
+          !/visual studio code|cursor|sublime|windsurf|vscodium|insiders/i.test(folder) &&
+          !/\.[a-z0-9]{1,5}$/i.test(folder)) { // not a filename
+        return capWords(folder);
+      }
+    }
+  }
+
+  // 4. JetBrains: "project – file"  (project is the FIRST segment)
+  if (_JETBRAINS_KEYS.some(k => a.includes(k))) {
+    const segs = t.split(/\s+[–—]\s+|\s+-\s+/).map(s => s.trim()).filter(Boolean);
+    if (segs.length >= 1 && segs[0].length <= 40 && !/\.[a-z0-9]{1,5}$/i.test(segs[0])) {
+      return capWords(segs[0]);
+    }
+  }
+
+  // 5. Sublime alt format: "file (project) - Sublime Text"
+  m = t.match(/\(([^)]{2,40})\)\s*[-–—]\s*sublime/i);
+  if (m) return capWords(m[1]);
+
+  // 6. App deploy domains: <project>.vercel.app / <project>.netlify.app
+  m = u.match(/^https?:\/\/([a-z0-9-]+)\.(?:vercel|netlify)\.app/i);
+  if (m && !['www','app','staging'].includes(m[1])) return capWords(m[1]);
+
+  return null;
+}
+
 // ── Native app tracking ───────────────────────────────────────────────────────
 let currentActivity = null;
 let lastActiveTime = Date.now();
@@ -1644,7 +1741,88 @@ ipcMain.handle('get-weekly', () => {
   return result;
 });
 
-ipcMain.handle('get-current-activity', () => currentActivity || currentBrowserActivity);
+// Sum active intervals (clamped to [ds, now]) from a sql.js result set
+function _sumIntervals(rows, ds, now) {
+  if (!rows || !rows.length) return 0;
+  let total = 0;
+  for (const v of rows[0].values) {
+    const s = Math.max(v[0], ds);
+    const e = Math.min(v[1], now);
+    if (e > s) total += (e - s);
+  }
+  return total;
+}
+
+ipcMain.handle('get-current-activity', () => {
+  const cur = currentActivity || currentBrowserActivity;
+  if (!cur) return null;
+  const isBrowser = (cur === currentBrowserActivity);
+  const now = Date.now();
+  const dayStart = new Date(); dayStart.setHours(0, 0, 0, 0);
+  const ds = dayStart.getTime();
+  const title = cur.windowTitle || cur.title || '';
+  const url = cur.url || null;
+
+  // Cumulative ACTIVE time today on this same tab/app, EXCLUDING the current
+  // open interval (the renderer adds the live stretch on top). This is what
+  // lets the live counter resume across visits instead of resetting to zero.
+  let todayMsPrior = 0;
+  let projectMsPrior = 0;
+  const project = detectProject(cur.appName, title, url) || null;
+  try {
+    if (db) {
+      if (isBrowser && url) {
+        // Per-tab accumulation for browser activity
+        const rows = db.exec(
+          `SELECT started_at, COALESCE(ended_at, ${now}) AS e FROM activity
+           WHERE url = ? AND id != ${cur.id}
+             AND COALESCE(ended_at, ${now}) > ${ds} AND started_at < ${now}
+             AND COALESCE(is_background, 0) = 0`, [url]);
+        todayMsPrior = _sumIntervals(rows, ds, now);
+      } else {
+        // Per-app accumulation for native activity
+        const rows = db.exec(
+          `SELECT started_at, COALESCE(ended_at, ${now}) AS e FROM activity
+           WHERE app_name = ? AND id != ${cur.id}
+             AND COALESCE(ended_at, ${now}) > ${ds} AND started_at < ${now}
+             AND COALESCE(is_background, 0) = 0`, [cur.appName]);
+        todayMsPrior = _sumIntervals(rows, ds, now);
+      }
+
+      // Project cumulative (only if a project is detected). Scans today's
+      // foreground rows once per IPC poll (~10s) — cheap enough.
+      if (project) {
+        const rules = getProjectRules();
+        const prows = db.exec(
+          `SELECT app_name, window_title, url, started_at, COALESCE(ended_at, ${now}) AS e
+           FROM activity
+           WHERE COALESCE(ended_at, ${now}) > ${ds} AND started_at < ${now}
+             AND COALESCE(is_background, 0) = 0 AND id != ${cur.id}`);
+        if (prows.length) {
+          for (const v of prows[0].values) {
+            const p = detectProject(v[0], v[1] || '', v[2] || null, rules);
+            if (p === project) {
+              const s = Math.max(v[3], ds), e = Math.min(v[4], now);
+              if (e > s) projectMsPrior += (e - s);
+            }
+          }
+        }
+      }
+    }
+  } catch (e) {}
+
+  return {
+    id: cur.id,
+    appName: cur.appName,
+    windowTitle: title,
+    url,
+    isBrowser,
+    startedAt: cur.startedAt,
+    todayMsPrior,       // active ms on this tab/app today, before the current stretch
+    project,
+    projectMsPrior,     // active ms on this project today, before the current stretch
+  };
+});
 
 ipcMain.handle('get-day-rows', (_, offset = 0) => {
   if (!db) return [];
@@ -1686,6 +1864,38 @@ ipcMain.handle('get-extension-status', () => {
     connectedSince: _extensionConnectedSince,
     lastMessage: _extensionLastMessage,
   };
+});
+
+// ── Project rules (user-defined keyword → project mappings) ───────────────────
+// Stored as JSON in app_state. Each rule: { name: "Cephas", match: ["cephas","usecephas","kingdom-intelligence","localhost:3000"] }
+ipcMain.handle('get-project-rules', () => {
+  if (!db) return [];
+  try {
+    const rows = db.exec("SELECT value FROM app_state WHERE key='project_rules'");
+    if (rows.length && rows[0].values.length) {
+      const parsed = JSON.parse(rows[0].values[0][0]);
+      return Array.isArray(parsed) ? parsed : [];
+    }
+  } catch (e) {}
+  return [];
+});
+
+ipcMain.handle('set-project-rules', (_, rules) => {
+  if (!db) return false;
+  if (!Array.isArray(rules)) return false;
+  // Sanitize: keep only well-formed { name, match[] } entries, cap sizes
+  const clean = rules
+    .filter(r => r && typeof r.name === 'string' && r.name.trim() && Array.isArray(r.match))
+    .slice(0, 50)
+    .map(r => ({
+      name: r.name.trim().substring(0, 40),
+      match: r.match.map(m => String(m || '').trim().toLowerCase()).filter(Boolean).slice(0, 20),
+    }))
+    .filter(r => r.match.length > 0);
+  db.run("INSERT OR REPLACE INTO app_state (key, value) VALUES ('project_rules', ?)", [JSON.stringify(clean)]);
+  _projectRulesCache = null; // bust cache so detection picks up changes immediately
+  saveDB();
+  return true;
 });
 
 // ── AI Settings (stored in app_state) ────────────────────────────────────────
@@ -2057,9 +2267,11 @@ ipcMain.handle('get-daily-summary-data', (_, offsetDays = 0) => {
   const activities = [];
   const appTotals = {};
   const catTotals = {};
+  const projectTotals = {};
   const hourBuckets = {};
   let totalMs = 0;
   let productiveMs = 0;
+  const _rules = getProjectRules();
 
   for (const v of rawRows[0].values) {
     const obj = Object.fromEntries(rawRows[0].columns.map((c, i) => [c, v[i]]));
@@ -2069,6 +2281,7 @@ ipcMain.handle('get-daily-summary-data', (_, offsetDays = 0) => {
     if (dur < 1000) continue; // skip sub-1s noise
 
     const cat = guessCategory(obj.app_name, obj.window_title);
+    const project = detectProject(obj.app_name, obj.window_title, obj.url, _rules);
     const hour = new Date(s).getHours();
 
     activities.push({
@@ -2080,6 +2293,7 @@ ipcMain.handle('get-daily-summary-data', (_, offsetDays = 0) => {
       duration: dur,
       category: cat.category,
       productive: cat.productive,
+      project: project || null,
       isBackground: !!obj.is_background,
       hour,
     });
@@ -2093,6 +2307,11 @@ ipcMain.handle('get-daily-summary-data', (_, offsetDays = 0) => {
 
     // Aggregate per category
     catTotals[cat.category] = (catTotals[cat.category] || 0) + dur;
+
+    // Aggregate per project (skip background; only count real foreground work)
+    if (project && !obj.is_background) {
+      projectTotals[project] = (projectTotals[project] || 0) + dur;
+    }
 
     // Aggregate per hour
     hourBuckets[hour] = (hourBuckets[hour] || 0) + dur;
@@ -2117,13 +2336,15 @@ ipcMain.handle('get-daily-summary-data', (_, offsetDays = 0) => {
   const peakHour = Object.entries(hourBuckets)
     .sort((a, b) => b[1] - a[1])[0];
 
-  // Build time blocks (consecutive periods of same-category work)
-  // For time log: we also track individual titles within each block
+  // Build time blocks (consecutive periods of same-category AND same-project work)
+  // Splitting on project too means back-to-back coding on different ventures
+  // stays as separate, attributable rows instead of one merged "Deep Work" lump.
   const timeBlocks = [];
   let currentBlock = null;
   for (const act of activities) {
     if (act.isBackground) continue;
     if (currentBlock && currentBlock.category === act.category &&
+        currentBlock.project === (act.project || null) &&
         act.start - currentBlock.end < 300000) { // 5min gap tolerance
       currentBlock.end = act.end;
       currentBlock.duration += act.duration;
@@ -2132,11 +2353,12 @@ ipcMain.handle('get-daily-summary-data', (_, offsetDays = 0) => {
     } else {
       if (currentBlock) {
         currentBlock.apps = [...currentBlock.apps];
-        currentBlock.titles = [...currentBlock.titles].slice(0, 8);
+        currentBlock.titles = [...currentBlock.titles].slice(0, 20);
         timeBlocks.push(currentBlock);
       }
       currentBlock = {
         category: act.category,
+        project: act.project || null,
         start: act.start,
         end: act.end,
         duration: act.duration,
@@ -2147,12 +2369,18 @@ ipcMain.handle('get-daily-summary-data', (_, offsetDays = 0) => {
   }
   if (currentBlock) {
     currentBlock.apps = [...currentBlock.apps];
-    currentBlock.titles = [...currentBlock.titles].slice(0, 8);
+    currentBlock.titles = [...currentBlock.titles].slice(0, 20);
     timeBlocks.push(currentBlock);
   }
 
   const score = totalMs > 0 ? Math.round((productiveMs / totalMs) * 100) : 0;
   const dateStr = target.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' });
+
+  // Top projects (for the summary header + AI context)
+  const topProjects = Object.entries(projectTotals)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 8)
+    .map(([project, ms]) => ({ project, ms }));
 
   return {
     date: dateStr,
@@ -2161,9 +2389,11 @@ ipcMain.handle('get-daily-summary-data', (_, offsetDays = 0) => {
     score,
     topApps,
     catTotals,
+    projectTotals,
+    topProjects,
     hourBuckets,
     peakHour: peakHour ? { hour: parseInt(peakHour[0]), ms: peakHour[1] } : null,
-    timeBlocks: timeBlocks.slice(0, 60), // enough for a full workday time log
+    timeBlocks: timeBlocks.slice(0, 80), // headroom for project-split granularity
     appCount: Object.keys(appTotals).length,
     activityCount: activities.length,
   };

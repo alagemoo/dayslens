@@ -1,6 +1,6 @@
 {
   "name": "daylens",
-  "version": "1.2.3",
+  "version": "1.3.0",
   "description": "Know where your day actually goes",
   "main": "src/main.js",
   "scripts": {

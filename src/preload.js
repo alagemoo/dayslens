@@ -24,4 +24,6 @@ contextBridge.exposeInMainWorld('daylens', {
   getAISettings:        ()                          => ipcRenderer.invoke('get-ai-settings'),
   setAISettings:        (provider, apiKey)           => ipcRenderer.invoke('set-ai-settings', provider, apiKey),
   callAI:               (prompt)                     => ipcRenderer.invoke('call-ai', prompt),
+  getProjectRules:      ()                          => ipcRenderer.invoke('get-project-rules'),
+  setProjectRules:      (rules)                      => ipcRenderer.invoke('set-project-rules', rules),
 });

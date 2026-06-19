@@ -641,6 +641,18 @@ html,body{width:100%;height:100%;overflow:hidden;background:var(--bg);color:var(
       </div>
     </div>
     <div>
+      <div class="settings-section-title">📂 Projects</div>
+      <div class="settings-block">
+        <div style="font-size:11px;color:var(--muted);line-height:1.6;margin-bottom:10px">Tag work by project so your Day Log reads "Software development — Cephas" instead of one generic line. DayLens auto-detects projects from editor folders &amp; GitHub repos; add rules below for anything else (e.g. a domain, a localhost port, a client name). Each rule matches its keywords against window titles, URLs, and app names.</div>
+        <div id="project-rules-list" style="display:flex;flex-direction:column;gap:8px"></div>
+        <button class="settings-btn" style="margin-top:10px;width:100%" onclick="addProjectRule()">+ Add project</button>
+        <div style="display:flex;gap:6px;margin-top:8px;align-items:center">
+          <button class="settings-btn primary" style="flex:1" onclick="saveProjectRules()">Save projects</button>
+          <div id="project-rules-saved" style="display:none;font-size:11px;color:var(--green)">✓ Saved</div>
+        </div>
+      </div>
+    </div>
+    <div>
       <div class="settings-section-title">System</div>
       <div class="settings-block">
         <div class="settings-row">
@@ -677,6 +689,51 @@ function openSettings(){
   initExtCard();
   initAutoStartToggle();
   initAISettingsUI();
+  initProjectRules();
+}
+
+// ── Project rules management ─────────────────────────────────────────────────
+let _projectRules = [];
+async function initProjectRules(){
+  try { _projectRules = await window.daylens.getProjectRules() || []; }
+  catch(e){ _projectRules = []; }
+  if(!Array.isArray(_projectRules)) _projectRules = [];
+  renderProjectRules();
+}
+function renderProjectRules(){
+  const wrap = document.getElementById('project-rules-list');
+  if(!wrap) return;
+  if(!_projectRules.length){
+    wrap.innerHTML = '<div style="font-size:11px;color:var(--muted);font-style:italic;padding:4px 0">No custom rules yet — auto-detection is still active. Add one to tag a project DayLens can\'t infer on its own.</div>';
+    return;
+  }
+  wrap.innerHTML = _projectRules.map((r,i)=>(
+    '<div style="display:flex;gap:6px;align-items:center">'+
+      '<input type="text" value="'+esc(r.name||'')+'" placeholder="Project name" oninput="updateProjectRule('+i+',\'name\',this.value)" style="flex:0 0 38%;background:var(--surface3);border:1px solid var(--border2);border-radius:var(--r-xs);padding:6px 8px;color:var(--text);font-size:11.5px;font-family:inherit;outline:none">'+
+      '<input type="text" value="'+esc((r.match||[]).join(', '))+'" placeholder="keywords, comma-separated" oninput="updateProjectRule('+i+',\'match\',this.value)" style="flex:1;background:var(--surface3);border:1px solid var(--border2);border-radius:var(--r-xs);padding:6px 8px;color:var(--text);font-size:11.5px;font-family:inherit;outline:none">'+
+      '<button class="settings-btn" style="padding:5px 9px;flex:0 0 auto" onclick="removeProjectRule('+i+')" title="Remove">✕</button>'+
+    '</div>'
+  )).join('');
+}
+function addProjectRule(){ _projectRules.push({name:'',match:[]}); renderProjectRules(); }
+function removeProjectRule(i){ _projectRules.splice(i,1); renderProjectRules(); }
+function updateProjectRule(i,field,val){
+  if(!_projectRules[i]) return;
+  if(field==='name') _projectRules[i].name = val;
+  else if(field==='match') _projectRules[i].match = val.split(',').map(s=>s.trim()).filter(Boolean);
+}
+async function saveProjectRules(){
+  const clean = _projectRules
+    .filter(r=>r.name && r.name.trim() && Array.isArray(r.match) && r.match.length)
+    .map(r=>({name:r.name.trim(), match:r.match.map(m=>String(m).trim().toLowerCase()).filter(Boolean)}));
+  try {
+    await window.daylens.setProjectRules(clean);
+    _projectRules = clean; renderProjectRules();
+    const s=document.getElementById('project-rules-saved');
+    if(s){ s.style.display='block'; setTimeout(()=>{ s.style.display='none'; }, 2500); }
+    // Refresh the open summary so new rules take effect immediately
+    if(typeof loadSummary==='function') loadSummary();
+  } catch(e){ console.error('Save project rules failed', e); }
 }
 
 async function initAutoStartToggle(){
@@ -990,34 +1047,55 @@ function updateDateChip(){document.getElementById('date-chip').textContent=new D
 
 // ─── Current Activity ─────────────────────────────────────────────────────────
 let _liveTimerInterval = null;
-let _currentTrackedApp = null;
-let _currentTrackedStart = null;
+let _curActId = null;
+let _curStart = null;
+let _curTodayPrior = 0;
+let _curProjectPrior = 0;
+let _curProject = null;
+
+function _renderLiveNumbers(){
+  const live = Date.now() - _curStart;
+  const t = document.getElementById('live-timer');
+  if(t) t.textContent = msToHuman(_curTodayPrior + live);
+  const v = document.getElementById('live-visit');
+  if(v) v.textContent = msToHuman(live);
+  if(_curProject){
+    const p = document.getElementById('live-project');
+    if(p) p.textContent = msToHuman(_curProjectPrior + live);
+  }
+}
 
 async function updateCurrentActivity(){
   const wrap=document.getElementById('current-activity-wrap');
   const a=await window.daylens.getCurrentActivity();
   if(!a){
     wrap.innerHTML='';
-    _currentTrackedApp=null;
-    _currentTrackedStart=null;
+    _curActId=null; _curStart=null;
     if(_liveTimerInterval){clearInterval(_liveTimerInterval);_liveTimerInterval=null;}
     return;
   }
-  // If same app as before, just update the timer element — don't rebuild DOM
-  if(_currentTrackedApp===a.appName && _currentTrackedStart===a.startedAt){
-    const timerEl=document.getElementById('live-timer');
-    if(timerEl) timerEl.textContent=msToHuman(Date.now()-a.startedAt);
+  // Same underlying activity row → just refresh cached priors and numbers,
+  // don't rebuild the DOM (avoids flicker / scroll jump).
+  if(_curActId===a.id && _curStart===a.startedAt){
+    _curTodayPrior = a.todayMsPrior || 0;
+    _curProjectPrior = a.projectMsPrior || 0;
+    _renderLiveNumbers();
     return;
   }
-  // New app — rebuild and start live ticker
-  _currentTrackedApp=a.appName;
-  _currentTrackedStart=a.startedAt;
-  wrap.innerHTML=`<div class="current-app-wrap"><div class="current-dot"></div><div class="current-info"><div class="current-label">Now tracking</div><div class="current-name">${appIcon(a.appName)} ${esc(a.appName)}</div>${a.windowTitle?`<div class="current-title">${a.windowTitle.substring(0,60)}</div>`:''}</div><div class="current-timer" id="live-timer">${msToHuman(Date.now()-a.startedAt)}</div></div>`;
+  // New activity — cache and rebuild
+  _curActId = a.id;
+  _curStart = a.startedAt;
+  _curTodayPrior = a.todayMsPrior || 0;
+  _curProjectPrior = a.projectMsPrior || 0;
+  _curProject = a.project || null;
+  const live = Date.now() - _curStart;
+  const scopeLabel = a.isBrowser ? 'today · this tab' : 'today · this app';
+  const projectLine = _curProject
+    ? `<div class="current-project" style="font-size:10.5px;color:var(--purple);margin-top:3px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">📂 ${esc(_curProject)} · <span id="live-project">${msToHuman(_curProjectPrior+live)}</span> today</div>`
+    : '';
+  wrap.innerHTML=`<div class="current-app-wrap"><div class="current-dot"></div><div class="current-info"><div class="current-label">Now tracking</div><div class="current-name">${appIcon(a.appName)} ${esc(a.appName)}</div>${a.windowTitle?`<div class="current-title">${esc(a.windowTitle.substring(0,60))}</div>`:''}${projectLine}</div><div class="current-timer-col" style="display:flex;flex-direction:column;align-items:flex-end;flex-shrink:0;text-align:right"><div class="current-timer" id="live-timer">${msToHuman(_curTodayPrior+live)}</div><div style="font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:0.12em;font-weight:700;margin-top:1px">${scopeLabel}</div><div style="font-size:11px;color:var(--text2);margin-top:4px"><span id="live-visit">${msToHuman(live)}</span> this visit</div></div></div>`;
   if(_liveTimerInterval) clearInterval(_liveTimerInterval);
-  _liveTimerInterval=setInterval(()=>{
-    const el=document.getElementById('live-timer');
-    if(el) el.textContent=msToHuman(Date.now()-a.startedAt);
-  },1000);
+  _liveTimerInterval=setInterval(_renderLiveNumbers,1000);
 }
 
 // ─── TODAY ────────────────────────────────────────────────────────────────────
@@ -1553,20 +1631,27 @@ async function callAIProvider(prompt) {
 
 function buildSummaryPrompt(data) {
   const fm = (ms) => { const h=Math.floor(ms/3600000),m=Math.floor((ms%3600000)/60000); return h>0?h+'h '+m+'m':m+'m'; };
+  const cleanTitle = (t,n) => t.replace(/ [-–|].*?(YouTube|Brave|Chrome|Google|Reddit|LinkedIn|Mozilla|Firefox|Edge|Safari).*$/i,'').replace(/\(\d+\)\s*/g,'').trim().substring(0,n);
   const bl = data.timeBlocks.map(b => {
     const st=new Date(b.start).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}), et=new Date(b.end).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
-    const ti=(b.titles||[]).slice(0,5).map(t=>t.replace(/ [-–|].*?(YouTube|Brave|Chrome|Google|Reddit|LinkedIn|Mozilla|Firefox|Edge|Safari).*$/i,'').replace(/\(\d+\)\s*/g,'').trim().substring(0,100)).filter(t=>t.length>2);
-    return st+'–'+et+' | Apps: '+b.apps.join(', ')+' | '+b.category+' | '+fm(b.duration)+(ti.length?'\n  Titles: '+ti.join(' | '):'');
+    const ti=(b.titles||[]).slice(0,8).map(t=>cleanTitle(t,110)).filter(t=>t.length>2);
+    const proj = b.project ? ' | Project: '+b.project : '';
+    return st+'–'+et+' | Apps: '+b.apps.join(', ')+' | '+b.category+proj+' | '+fm(b.duration)+(ti.length?'\n  Titles: '+ti.join(' | '):'');
   }).join('\n');
-  const ta = data.topApps.map(a => { const ct=a.titles.slice(0,4).map(t=>t.replace(/ [-–|].*?(YouTube|Brave|Chrome|Google|Reddit|LinkedIn|Mozilla|Firefox|Edge).*$/i,'').replace(/\(\d+\)\s*/g,'').trim().substring(0,80)).filter(t=>t.length>2); return '- '+a.app+' ('+a.category+', '+fm(a.ms)+')' + (ct.length?': '+ct.join('; '):''); }).join('\n');
-  return 'You are an intelligent productivity analyst for DayLens. Transform raw computer activity into a professional daily time log.\n\nDATE: '+data.date+'\nTOTALS: '+fm(data.totalMs)+' tracked, '+fm(data.productiveMs)+' productive ('+data.score+'%), '+data.appCount+' apps\n\nRAW ACTIVITY BLOCKS:\n'+bl+'\n\nTOP APPS:\n'+ta+'\n\nRespond with EXACTLY two sections separated by "---":\n\nSECTION 1 — PROFESSIONAL TIME LOG:\nOne line per block. Format: START–END | Professional task description | Duration\nINFERENCE RULES (translate apps into work, never just list app names):\n• Code editors → "Software development" + infer language/project from titles\n• AI tools (claude.ai, chatgpt, gemini) → "AI-assisted R&D"\n• github.com → "Code review & version control"\n• YouTube + tutorial keywords → "Technical learning: [topic]"\n• YouTube + entertainment/religious → "Personal — [description]"\n• Gmail/Outlook/Slack → "Email & team communication"\n• Zoom/Meet/Teams → "Video meeting / conference call"\n• Design tools → "Design work"\n• IP addresses/localhost → "Server admin & local dev testing"\n• OBS Studio → "Content production & screen recording"\n• Merge blocks under 3min into neighbors. Be honest about personal time.\n\nSECTION 2 — DAY NARRATIVE (2-3 paragraphs, under 180 words):\nDescribe the day flow. Highlight longest focus block. Note patterns. One actionable tip. Use **bold** for key metrics.';
+  const ta = data.topApps.map(a => { const ct=a.titles.slice(0,4).map(t=>cleanTitle(t,80)).filter(t=>t.length>2); return '- '+a.app+' ('+a.category+', '+fm(a.ms)+')' + (ct.length?': '+ct.join('; '):''); }).join('\n');
+  const tp = (data.topProjects||[]).length ? '\n\nDETECTED PROJECTS (time attributed):\n'+data.topProjects.map(p=>'- '+p.project+' ('+fm(p.ms)+')').join('\n') : '';
+  return 'You are an intelligent productivity analyst for DayLens. Transform raw computer activity into a professional daily time log.\n\nDATE: '+data.date+'\nTOTALS: '+fm(data.totalMs)+' tracked, '+fm(data.productiveMs)+' productive ('+data.score+'%), '+data.appCount+' apps'+tp+'\n\nRAW ACTIVITY BLOCKS:\n'+bl+'\n\nTOP APPS:\n'+ta+'\n\nRespond with EXACTLY two sections separated by "---":\n\nSECTION 1 — PROFESSIONAL TIME LOG:\nOne line per block. Format: START–END | Professional task description | Duration\nINFERENCE RULES (translate apps into work, never just list app names):\n• When a block has a Project, NAME IT in the description (e.g. "Software development — Cephas"). Keep distinct projects on distinct lines; never merge two different projects into one entry.\n• Code editors → "Software development" + the project/language from titles\n• AI tools (claude.ai, chatgpt, gemini) → "AI-assisted R&D"\n• github.com → "Code review & version control"\n• YouTube + tutorial keywords → "Technical learning: [topic]"\n• YouTube + entertainment/religious → "Personal — [description]"\n• Gmail/Outlook/Slack → "Email & team communication"\n• Zoom/Meet/Teams → "Video meeting / conference call"\n• Design tools → "Design work"\n• IP addresses/localhost → "Server admin & local dev testing"\n• OBS Studio → "Content production & screen recording"\n• Preserve short but meaningful project work as its own line. Be honest about personal time.\n\nSECTION 2 — DAY NARRATIVE (2-3 paragraphs, under 200 words):\nDescribe the day flow. If projects were detected, say how time split across them. Highlight the longest focus block. Note patterns. One actionable tip. Use **bold** for key metrics and project names.';
 }
 
 function renderTimeLog(wrap, data) {
   const score=data.score, grade=scoreGrade(score), catEntries=Object.entries(data.catTotals).sort((a,b)=>b[1]-a[1]);
   const fmtHour=(h)=>h===0?'12 AM':h<12?h+' AM':h===12?'12 PM':(h-12)+' PM';
-  const MIN_SUMMARY_MS = 10 * 60 * 1000; // 10 min minimum for Day Summary
-  const MERGE_GAP_MS = 2 * 60 * 60 * 1000; // Merge same-task blocks within 2 hours
+  // Generic activities need to clear a higher bar to earn their own row.
+  // Project-tagged work earns a row at a much lower bar — those short blocks
+  // (a quick 4-min fix on Cephas) are exactly what you don't want swept away.
+  const MIN_SUMMARY_MS = 5 * 60 * 1000;     // 5 min for generic rows
+  const PROJECT_MIN_MS = 2 * 60 * 1000;     // 2 min if a project was detected
+  const MERGE_GAP_MS   = 2 * 60 * 60 * 1000; // Merge same-task blocks within 2 hours
 
   // Step 1: Build raw rows with BROAD grouping keys
   // Philosophy: a timesheet has 5-10 rows for a full day, not 20.
@@ -1578,63 +1663,66 @@ function renderTimeLog(wrap, data) {
   //   "Design"        = Figma/Canva/Inkscape etc (one row)
   //   "Documents"     = Word/Excel/Notion/Notepad (one row)
   //   Everything else = groups by category
-  function groupKey(apps, category, desc) {
+  function groupKey(apps, category, desc, project) {
     const a = apps.map(x => x.toLowerCase());
+    let base;
     // Meetings stay separate — they're distinct from async communication
-    if (a.some(x => ['zoom','meet.google','teams.microsoft','webex'].some(k => x.includes(k)))) {
-      // Only classify as meeting if it's likely a call, not just Teams chat
-      if (category === 'Communication') return 'meetings';
+    if (a.some(x => ['zoom','meet.google','teams.microsoft','webex'].some(k => x.includes(k))) && category === 'Communication') {
+      base = 'meetings';
     }
-    // All other communication merges into one row
-    if (category === 'Communication') return 'communication';
-    // All development work merges: coding + AI assistants + GitHub + debugging
-    if (category === 'Deep Work') return 'development';
-    // Documents — writing, spreadsheets, notes
-    if (category === 'Documents') return 'documents';
-    // Learning
-    if (category === 'Learning') return 'learning';
-    // Browsing — general web research
-    if (category === 'Browsing') return 'browsing';
-    // Social Media
-    if (category === 'Social Media') return 'social-media';
-    // Entertainment
-    if (category === 'Entertainment') return 'entertainment';
-    // System / Other — per description since these are varied
-    return desc;
+    else if (category === 'Communication') base = 'communication';
+    else if (category === 'Deep Work') base = 'development';
+    else if (category === 'Documents') base = 'documents';
+    else if (category === 'Learning') base = 'learning';
+    else if (category === 'Browsing') base = 'browsing';
+    else if (category === 'Social Media') base = 'social-media';
+    else if (category === 'Entertainment') base = 'entertainment';
+    else base = desc; // System / Other — per description since these are varied
+    // A detected project splits the row out so distinct ventures never merge
+    // into one generic line. No project → behaves exactly as before.
+    return project ? base + '::' + project : base;
   }
 
   // Step 1b: Better display labels for each group key
-  function groupLabel(groupKey, apps, mergedDesc) {
+  function groupLabel(groupKey, apps, mergedDesc, project) {
     const a = [...apps].map(x => x.toLowerCase());
-    switch(groupKey) {
-      case 'meetings': return 'Meetings & conference calls';
-      case 'communication': return 'Communication — email, messaging & chat';
+    const base = groupKey.split('::')[0];
+    let label;
+    switch(base) {
+      case 'meetings': label = 'Meetings & conference calls'; break;
+      case 'communication': label = 'Communication — email, messaging & chat'; break;
       case 'development': {
-        // Try to be specific about WHAT was being developed
         const hasCode = a.some(x => ['code','vscode','visual studio','sublime','cursor','webstorm'].some(k => x.includes(k)));
         const hasAI = a.some(x => ['claude.ai','chatgpt','gemini','perplexity','copilot'].some(k => x.includes(k)));
         const hasGH = a.some(x => x.includes('github'));
-        if (hasCode && hasAI) return 'Software development & AI-assisted R&D';
-        if (hasCode && hasGH) return 'Software development & code review';
-        if (hasCode) return 'Software development';
-        if (hasAI) return 'AI-assisted research & development';
-        if (hasGH) return 'Code review & repository management';
-        return mergedDesc || 'Development & technical work';
+        if (hasCode && hasAI) label = 'Software development & AI-assisted R&D';
+        else if (hasCode && hasGH) label = 'Software development & code review';
+        else if (hasCode) label = 'Software development';
+        else if (hasAI) label = 'AI-assisted research & development';
+        else if (hasGH) label = 'Code review & repository management';
+        else label = mergedDesc || 'Development & technical work';
+        break;
       }
-      case 'documents': return 'Documentation & writing';
-      case 'learning': return 'Learning & professional development';
-      case 'browsing': return 'Web research & browsing';
-      case 'social-media': return 'Social media';
-      case 'entertainment': return 'Personal — entertainment & breaks';
-      default: return mergedDesc;
+      case 'documents': label = 'Documentation & writing'; break;
+      case 'learning': label = 'Learning & professional development'; break;
+      case 'browsing': label = 'Web research & browsing'; break;
+      case 'social-media': label = 'Social media'; break;
+      case 'entertainment': label = 'Personal — entertainment & breaks'; break;
+      default: label = mergedDesc;
     }
+    // Append the project so the row reads "Software development — Cephas".
+    // groupKey may carry a "::project" suffix; prefer the explicit project arg.
+    const proj = project || (groupKey.includes('::') ? groupKey.split('::')[1] : null);
+    if (proj && !label.toLowerCase().includes(proj.toLowerCase())) label += ' — ' + proj;
+    return label;
   }
 
   const rawRows = data.timeBlocks.filter(b => b.duration >= 30000).map(b => {
     const color = CAT_COLORS[b.category] || '#64748b';
     const desc = inferTaskDescription(b.apps, b.category, b.titles || [], b.duration);
-    const gk = groupKey(b.apps, b.category, desc);
-    return { startTs: b.start, endTs: b.end, apps: b.apps, category: b.category, color, duration: b.duration, localDesc: desc, groupKey: gk };
+    const project = b.project || null;
+    const gk = groupKey(b.apps, b.category, desc, project);
+    return { startTs: b.start, endTs: b.end, apps: b.apps, category: b.category, color, duration: b.duration, localDesc: desc, groupKey: gk, project };
   });
 
   // Step 2: Proximity-aware merging
@@ -1656,19 +1744,21 @@ function renderTimeLog(wrap, data) {
       merged.push({
         startTs: r.startTs, endTs: r.endTs, appsSet: new Set(r.apps),
         category: r.category, color: r.color, duration: r.duration,
-        localDesc: r.localDesc, groupKey: r.groupKey, aiDesc: null,
+        localDesc: r.localDesc, groupKey: r.groupKey, project: r.project, aiDesc: null,
       });
     }
   }
 
   // Step 2b: Apply smart labels based on what actually merged
   for (const g of merged) {
-    g.localDesc = groupLabel(g.groupKey, g.appsSet, g.localDesc);
+    g.localDesc = groupLabel(g.groupKey, g.appsSet, g.localDesc, g.project);
   }
 
-  // Step 3: Apply minimum threshold, sort chronologically
+  // Step 3: Threshold — generic work needs MIN_SUMMARY_MS; project work only
+  // needs PROJECT_MIN_MS so meaningful short sessions keep their own row.
+  const isSignificant = (g) => g.project ? g.duration >= PROJECT_MIN_MS : g.duration >= MIN_SUMMARY_MS;
   const significantRows = merged
-    .filter(g => g.duration >= MIN_SUMMARY_MS)
+    .filter(isSignificant)
     .sort((a, b) => a.startTs - b.startTs)
     .map(g => ({
       start: new Date(g.startTs).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
@@ -1681,20 +1771,41 @@ function renderTimeLog(wrap, data) {
       aiDesc: null,
     }));
 
-  // Step 4: Collect filtered time into an "Other / misc" catch-all row
-  // so the total always reconciles with tracked time
+  // Step 4: Roll up sub-threshold time BY CATEGORY instead of one undifferentiated
+  // "miscellaneous" lump. A short, generic comms blip becomes "Other communication
+  // — 7m" — it keeps its categorical identity instead of vanishing.
+  const smallByCat = {};
+  for (const g of merged) {
+    if (isSignificant(g)) continue;
+    if (!smallByCat[g.category]) smallByCat[g.category] = { ms: 0, color: g.color };
+    smallByCat[g.category].ms += g.duration;
+  }
   const significantMs = significantRows.reduce((s, r) => s + r.duration, 0);
-  const miscMs = data.totalMs - significantMs;
+  const smallMs = Object.values(smallByCat).reduce((s, c) => s + c.ms, 0);
+  // Anything still unaccounted (sub-30s noise, background gaps) reconciles here
+  const leftoverMs = Math.max(0, data.totalMs - significantMs - smallMs);
+
   const logRows = [...significantRows];
-  if (miscMs >= 60000) {
-    // Add a catch-all row at the end — don't let time vanish from the log
+  // Per-category short-activity rollup rows
+  Object.entries(smallByCat)
+    .filter(([, c]) => c.ms >= 60000)
+    .sort((a, b) => b[1].ms - a[1].ms)
+    .forEach(([cat, c]) => {
+      logRows.push({
+        start: '—', end: '—', apps: [],
+        category: cat, color: c.color || CAT_COLORS[cat] || '#64748b',
+        duration: c.ms,
+        localDesc: 'Short ' + cat.toLowerCase() + ' activities',
+        aiDesc: null,
+      });
+    });
+  // Final catch-all only for genuinely unclassifiable leftover
+  if (leftoverMs >= 60000) {
     logRows.push({
-      start: '—', end: '—',
-      apps: [],
-      category: 'Other',
-      color: CAT_COLORS['Other'] || '#64748b',
-      duration: miscMs,
-      localDesc: 'Other / miscellaneous activities (<15 min each)',
+      start: '—', end: '—', apps: [],
+      category: 'Other', color: CAT_COLORS['Other'] || '#64748b',
+      duration: leftoverMs,
+      localDesc: 'Other / brief activities',
       aiDesc: null,
     });
   }
@@ -1704,7 +1815,7 @@ function renderTimeLog(wrap, data) {
   const pLabel=_aiSettings.provider==='none'?'':'<span style="font-size:9px;color:var(--muted);margin-left:8px">AI: '+_aiSettings.provider+'</span>';
   const noBanner=_aiSettings.provider==='none'?'<div style="background:rgba(91,156,246,0.05);border:1px solid rgba(91,156,246,0.15);border-radius:var(--r-sm);padding:10px 14px;margin-bottom:14px;display:flex;align-items:center;gap:10px"><span style="font-size:16px">🧠</span><div style="flex:1"><div style="font-size:12px;color:var(--text2);font-weight:500">AI Enhancement Available</div><div style="font-size:10.5px;color:var(--muted);margin-top:2px">Enable an AI provider in Settings for smarter task descriptions and narratives.</div></div><button class="topbar-btn" style="font-size:10.5px;padding:4px 10px" onclick="openSettings()">Configure</button></div>':'';
   const tRows=logRows.map((r,i)=>'<tr class="timelog-row'+(r.start==='—'?' timelog-misc-row':'')+'"><td class="timelog-time">'+r.start+'</td><td class="timelog-time">'+r.end+'</td><td class="timelog-task" id="timelog-task-'+i+'"><div class="timelog-task-text'+(r.start==='—'?' timelog-misc-text':'')+'">'+esc(r.localDesc)+'</div>'+(r.apps.length?'<div class="timelog-task-apps">'+r.apps.map(a=>esc(a)).join(', ')+'</div>':'')+'</td><td><span class="timelog-cat-pill" style="background:'+r.color+'22;color:'+r.color+';border:1px solid '+r.color+'44">'+r.category+'</span></td><td class="timelog-dur">'+msToHuman(r.duration)+'</td></tr>').join('');
-  wrap.innerHTML=noBanner+'<div class="summary-card" style="border-top:2px solid '+grade.color+'"><div class="summary-header-row"><div class="summary-section-title" style="margin-bottom:0">📋 Time Log — '+data.date+pLabel+'</div><div style="display:flex;gap:8px;align-items:center"><div class="summary-badge">'+grade.label+' · Score '+score+'</div><button class="topbar-btn" style="font-size:11px;padding:4px 10px" onclick="copyTimeLog()">📋 Copy</button></div></div><div style="margin-top:14px;display:flex;gap:16px;margin-bottom:18px;flex-wrap:wrap"><div style="font-size:12px;color:var(--text2)">⏱ <strong style="color:var(--accent)">'+msToHuman(data.totalMs)+'</strong> tracked</div><div style="font-size:12px;color:var(--text2)">🎯 <strong style="color:var(--green)">'+msToHuman(data.productiveMs)+'</strong> productive</div><div style="font-size:12px;color:var(--text2)">📱 <strong style="color:var(--purple)">'+data.appCount+'</strong> apps</div>'+(data.peakHour?'<div style="font-size:12px;color:var(--text2)">⏰ Peak: <strong style="color:var(--yellow)">'+fmtHour(data.peakHour.hour)+'</strong></div>':'')+'</div><div class="timelog-table-wrap"><table class="timelog-table"><thead><tr><th>Start</th><th>End</th><th>Task / Activity</th><th>Category</th><th style="text-align:right">Duration</th></tr></thead><tbody>'+tRows+'</tbody><tfoot><tr class="timelog-total-row"><td colspan="4" style="text-align:right;font-weight:700;color:var(--text2)">Total Logged</td><td class="timelog-dur" style="font-weight:800;color:var(--accent)">'+msToHuman(loggedMs)+'</td></tr></tfoot></table></div></div><div class="summary-card" id="ai-narrative-card">'+(_aiSettings.provider==='none'?'<div class="summary-section-title">📊 Day Overview</div><div style="font-size:13px;color:var(--text2);line-height:1.7">'+buildLocalNarrative(data)+'</div>':'<div class="summary-generating"><div class="summary-spinner"></div><div class="summary-gen-text">Generating AI insights…</div></div>')+'</div><div style="display:grid;grid-template-columns:1fr 1fr;gap:14px"><div class="summary-card"><div class="summary-section-title">Time Distribution</div><div style="display:flex;flex-direction:column;gap:8px">'+catEntries.map(([cat,ms])=>{const p=Math.round(ms/data.totalMs*100),c=CAT_COLORS[cat]||'#64748b';return '<div style="display:flex;align-items:center;gap:10px"><div style="width:8px;height:8px;border-radius:2px;background:'+c+';flex-shrink:0"></div><div style="flex:1;font-size:12px;color:var(--text2);font-weight:500">'+cat+'</div><div style="width:100px;height:4px;background:var(--border2);border-radius:2px;overflow:hidden"><div style="width:'+p+'%;height:100%;background:'+c+';border-radius:2px"></div></div><div style="font-size:11px;color:var(--muted);min-width:36px;text-align:right">'+msToHuman(ms)+'</div><div style="font-size:10px;color:var(--muted);width:28px;text-align:right">'+p+'%</div></div>';}).join('')+'</div></div><div class="summary-card"><div class="summary-section-title">Top Apps</div><div style="display:flex;flex-direction:column;gap:4px">'+data.topApps.slice(0,6).map(a=>{const c=CAT_COLORS[a.category]||'#64748b';return '<div style="display:flex;align-items:center;gap:8px;padding:4px 6px">'+appIcon(a.app)+'<div style="flex:1;min-width:0"><div style="font-size:11.5px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+esc(a.app)+'</div></div><div style="font-size:10.5px;color:var(--muted)">'+msToHuman(a.ms)+'</div></div>';}).join('')+'</div></div></div>';
+  wrap.innerHTML=noBanner+'<div class="summary-card" style="border-top:2px solid '+grade.color+'"><div class="summary-header-row"><div class="summary-section-title" style="margin-bottom:0">📋 Time Log — '+data.date+pLabel+'</div><div style="display:flex;gap:8px;align-items:center"><div class="summary-badge">'+grade.label+' · Score '+score+'</div><button class="topbar-btn" style="font-size:11px;padding:4px 10px" onclick="copyTimeLog()">📋 Copy</button></div></div><div style="margin-top:14px;display:flex;gap:16px;margin-bottom:18px;flex-wrap:wrap"><div style="font-size:12px;color:var(--text2)">⏱ <strong style="color:var(--accent)">'+msToHuman(data.totalMs)+'</strong> tracked</div><div style="font-size:12px;color:var(--text2)">🎯 <strong style="color:var(--green)">'+msToHuman(data.productiveMs)+'</strong> productive</div><div style="font-size:12px;color:var(--text2)">📱 <strong style="color:var(--purple)">'+data.appCount+'</strong> apps</div>'+((data.topProjects&&data.topProjects.length)?'<div style="font-size:12px;color:var(--text2)">📂 <strong style="color:var(--green)">'+data.topProjects.length+'</strong> project'+(data.topProjects.length>1?'s':'')+'</div>':'')+(data.peakHour?'<div style="font-size:12px;color:var(--text2)">⏰ Peak: <strong style="color:var(--yellow)">'+fmtHour(data.peakHour.hour)+'</strong></div>':'')+'</div><div class="timelog-table-wrap"><table class="timelog-table"><thead><tr><th>Start</th><th>End</th><th>Task / Activity</th><th>Category</th><th style="text-align:right">Duration</th></tr></thead><tbody>'+tRows+'</tbody><tfoot><tr class="timelog-total-row"><td colspan="4" style="text-align:right;font-weight:700;color:var(--text2)">Total Logged</td><td class="timelog-dur" style="font-weight:800;color:var(--accent)">'+msToHuman(loggedMs)+'</td></tr></tfoot></table></div></div><div class="summary-card" id="ai-narrative-card">'+(_aiSettings.provider==='none'?'<div class="summary-section-title">📊 Day Overview</div><div style="font-size:13px;color:var(--text2);line-height:1.7">'+buildLocalNarrative(data)+'</div>':'<div class="summary-generating"><div class="summary-spinner"></div><div class="summary-gen-text">Generating AI insights…</div></div>')+'</div><div style="display:grid;grid-template-columns:1fr 1fr;gap:14px"><div class="summary-card"><div class="summary-section-title">Time Distribution</div><div style="display:flex;flex-direction:column;gap:8px">'+catEntries.map(([cat,ms])=>{const p=Math.round(ms/data.totalMs*100),c=CAT_COLORS[cat]||'#64748b';return '<div style="display:flex;align-items:center;gap:10px"><div style="width:8px;height:8px;border-radius:2px;background:'+c+';flex-shrink:0"></div><div style="flex:1;font-size:12px;color:var(--text2);font-weight:500">'+cat+'</div><div style="width:100px;height:4px;background:var(--border2);border-radius:2px;overflow:hidden"><div style="width:'+p+'%;height:100%;background:'+c+';border-radius:2px"></div></div><div style="font-size:11px;color:var(--muted);min-width:36px;text-align:right">'+msToHuman(ms)+'</div><div style="font-size:10px;color:var(--muted);width:28px;text-align:right">'+p+'%</div></div>';}).join('')+'</div></div><div class="summary-card"><div class="summary-section-title">Top Apps</div><div style="display:flex;flex-direction:column;gap:4px">'+data.topApps.slice(0,6).map(a=>{const c=CAT_COLORS[a.category]||'#64748b';return '<div style="display:flex;align-items:center;gap:8px;padding:4px 6px">'+appIcon(a.app)+'<div style="flex:1;min-width:0"><div style="font-size:11.5px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+esc(a.app)+'</div></div><div style="font-size:10.5px;color:var(--muted)">'+msToHuman(a.ms)+'</div></div>';}).join('')+'</div></div></div>';
 }
 
 function buildLocalNarrative(data) {
@@ -1713,6 +1824,10 @@ function buildLocalNarrative(data) {
   const tc=ce[0]?ce[0][0]:'various', ta=data.topApps[0]?data.topApps[0].app:'';
   const dw=data.catTotals['Deep Work']||0, em=(data.catTotals['Entertainment']||0)+(data.catTotals['Social Media']||0);
   let n='You tracked <strong>'+msToHuman(data.totalMs)+'</strong> across '+data.appCount+' apps. Most time in <strong>'+tc+'</strong>'+(ta?', primarily <strong>'+ta+'</strong>':'')+'. ';
+  if(data.topProjects&&data.topProjects.length){
+    const ps=data.topProjects.slice(0,3).map(p=>'<strong>'+p.project+'</strong> ('+msToHuman(p.ms)+')').join(', ');
+    n+='Project work: '+ps+'. ';
+  }
   if(data.peakHour) n+='Peak activity around <strong>'+fH(data.peakHour.hour)+'</strong>. ';
   if(dw>0) n+=msToHuman(dw)+' of deep work logged. ';
   if(em>3600000) n+='Entertainment & social totalled '+msToHuman(em)+' — consider shorter breaks tomorrow. ';
